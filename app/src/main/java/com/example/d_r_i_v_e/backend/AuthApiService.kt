@@ -1,8 +1,6 @@
 package com.example.d_r_i_v_e.backend
 
-import android.os.Build
 import android.util.Log
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Response
@@ -26,29 +24,6 @@ interface AuthApiService {
     companion object {
         private const val TAG = "AuthApiService"
 
-        private fun isEmulator(): Boolean {
-            val hardware = Build.HARDWARE.lowercase()
-            val product = Build.PRODUCT.lowercase()
-            val model = Build.MODEL.lowercase()
-            val fingerprint = Build.FINGERPRINT.lowercase()
-
-            return hardware.contains("goldfish") ||
-                    hardware.contains("ranchu") ||
-                    model.contains("google_sdk") ||
-                    model.contains("emulator") ||
-                    model.contains("android sdk built for x86") ||
-                    product.contains("sdk") ||
-                    product.contains("google_sdk") ||
-                    product.contains("emulator") ||
-                    fingerprint.startsWith("generic")
-        }
-
-        fun getBaseUrl(): String {
-            val url = ApiConfig.getBaseUrl()
-            Log.d(TAG, "Resolved Base URL: $url (isEmulator = ${isEmulator()}, Model = ${Build.MODEL}, Device = ${Build.DEVICE})")
-            return url
-        }
-
         fun create(): AuthApiService {
             val loggingInterceptor = HttpLoggingInterceptor { message ->
                 Log.d(TAG, message)
@@ -58,17 +33,7 @@ interface AuthApiService {
 
             val okHttpClient = OkHttpClient.Builder()
                 .addInterceptor { chain ->
-                    val original = chain.request()
-                    val currentBaseUrl = ApiConfig.getBaseUrl()
-                    val currentHttpUrl = currentBaseUrl.toHttpUrl()
-
-                    val newUrl = original.url.newBuilder()
-                        .scheme(currentHttpUrl.scheme)
-                        .host(currentHttpUrl.host)
-                        .port(currentHttpUrl.port)
-                        .build()
-
-                    val builder = original.newBuilder().url(newUrl)
+                    val builder = chain.request().newBuilder()
                     AuthSession.token?.let { token ->
                         builder.header("Authorization", "Bearer $token")
                     }
@@ -77,7 +42,7 @@ interface AuthApiService {
                     try {
                         chain.proceed(request)
                     } catch (e: Exception) {
-                        Log.e(TAG, "❌ Network Request Failed for ${request.url}: ${e.message}", e)
+                        Log.e(TAG, "Network request failed for ${request.url}: ${e.message}", e)
                         throw e
                     }
                 }
@@ -89,7 +54,7 @@ interface AuthApiService {
                 .build()
 
             return Retrofit.Builder()
-                .baseUrl("http://127.0.0.1:5000/")
+                .baseUrl(ApiConfig.BASE_URL)
                 .client(okHttpClient)
                 .addConverterFactory(GsonConverterFactory.create())
                 .build()

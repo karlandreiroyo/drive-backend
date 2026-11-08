@@ -35,11 +35,9 @@ interface OtpApiService {
 }
 
 object OtpApiClient {
-    fun getBaseUrl(): String = AuthApiService.getBaseUrl()
-
     val service: OtpApiService by lazy {
         Retrofit.Builder()
-            .baseUrl(getBaseUrl())
+            .baseUrl(ApiConfig.BASE_URL)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(OtpApiService::class.java)

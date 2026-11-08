@@ -11,20 +11,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.ui.Modifier
-import androidx.lifecycle.lifecycleScope
-import com.example.d_r_i_v_e.backend.ApiConfig
 import com.example.d_r_i_v_e.frontend.AppNavigation
 import com.example.d_r_i_v_e.frontend.theme.D_R_I_V_ETheme
-import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        ApiConfig.init(this)
-        lifecycleScope.launch {
-            ApiConfig.refreshBaseUrl()
-        }
 
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),

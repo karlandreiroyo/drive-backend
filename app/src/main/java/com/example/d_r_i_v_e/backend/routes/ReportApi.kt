@@ -2,7 +2,7 @@ package com.example.d_r_i_v_e.backend.routes
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.d_r_i_v_e.backend.AuthApiService
+import com.example.d_r_i_v_e.backend.ApiConfig
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,7 +35,7 @@ interface ReportApiService {
 object ReportApiClient {
     val service: ReportApiService by lazy {
         Retrofit.Builder()
-            .baseUrl(AuthApiService.getBaseUrl())
+            .baseUrl(ApiConfig.BASE_URL)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
             .create(ReportApiService::class.java)

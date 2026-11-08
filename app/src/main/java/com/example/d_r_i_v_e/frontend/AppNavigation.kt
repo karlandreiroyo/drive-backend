@@ -8,7 +8,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.d_r_i_v_e.TripEntry
 import com.example.d_r_i_v_e.Incident
 import com.example.d_r_i_v_e.backend.AuthSession
-import com.example.d_r_i_v_e.backend.ApiConfig
 import com.example.d_r_i_v_e.backend.AuthViewModel
 import com.example.d_r_i_v_e.backend.OtpViewModel
 import com.example.d_r_i_v_e.backend.OtpUiState
@@ -18,8 +17,6 @@ import com.example.d_r_i_v_e.backend.routes.ReportViewModel
 fun AppNavigation() {
     val context = LocalContext.current
     LaunchedEffect(Unit) {
-        ApiConfig.init(context)
-        ApiConfig.refreshBaseUrl()
         AuthSession.restore(context)
     }
     val otpViewModel: OtpViewModel = viewModel()

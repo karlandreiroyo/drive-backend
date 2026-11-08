@@ -3,7 +3,7 @@ package com.example.d_r_i_v_e.backend.routes
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.d_r_i_v_e.backend.AuthApiService
+import com.example.d_r_i_v_e.backend.ApiConfig
 import com.example.d_r_i_v_e.backend.AuthSession
 import com.example.d_r_i_v_e.ml.DetectionResult
 import com.google.gson.annotations.SerializedName
@@ -58,11 +58,9 @@ object DetectionApiClient {
             .build()
     }
 
-    // Created lazily on first use so ApiConfig's startup probe has already
-    // resolved the base URL by the time Retrofit is built.
     private val service: DetectionApiService by lazy {
         Retrofit.Builder()
-            .baseUrl(AuthApiService.getBaseUrl())
+            .baseUrl(ApiConfig.BASE_URL)
             .client(httpClient)
             .addConverterFactory(GsonConverterFactory.create())
             .build()

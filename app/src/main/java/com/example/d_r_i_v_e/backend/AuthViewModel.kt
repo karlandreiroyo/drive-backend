@@ -12,9 +12,6 @@ import kotlinx.coroutines.launch
 
 class AuthViewModel : ViewModel() {
 
-    // Lazy so the Retrofit client is built on first use — after the
-    // startup probe in ApiConfig has cached the reachable base URL —
-    // instead of at ViewModel construction, which races the probe.
     private val apiService: AuthApiService by lazy { AuthApiService.create() }
 
     private val _signUpState = MutableStateFlow<SignUpState>(SignUpState.Idle)
