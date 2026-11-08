@@ -86,7 +86,7 @@ fun LiveFeedScreen(
     var showAlert by remember { mutableStateOf(false) }
     var alertEvent by remember { mutableStateOf<DetectionEvent?>(null) }
 
-    val alertPlayer = rememberDetectionAlertPlayer()
+    val alertSpeaker = rememberDetectionAlertSpeaker()
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     var hasCameraPermission by remember {
@@ -134,7 +134,7 @@ fun LiveFeedScreen(
     val onFrameDetection: (DetectionResult) -> Unit = { result ->
         mainHandler.post {
             vibrateAlert(context)
-            alertPlayer.play()
+            alertSpeaker.triggerDetectionAlert("Warning! ${result.label} detected")
         }
         detectionViewModel.onDetection(result)
     }
