@@ -2,6 +2,7 @@ package com.example.d_r_i_v_e.frontend
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
@@ -37,8 +38,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.absoluteValue
+
+private const val AUTO_ADVANCE_INTERVAL_MS = 4_000L
 
 @Composable
 fun OnboardingScreen(
@@ -49,13 +54,41 @@ fun OnboardingScreen(
     val pagerState = rememberPagerState(pageCount = { onboardingItems.size })
     val scope = rememberCoroutineScope()
 
-    Box(modifier = modifier.fillMaxSize()) {
+    // Carousel behavior: advance on its own, pausing while the user drags
+    // and stopping on the last page so the Get Started CTA stays visible.
+    LaunchedEffect(pagerState) {
+        while (true) {
+            snapshotFlow { pagerState.isScrollInProgress }.first { scrolling -> !scrolling }
+            delay(AUTO_ADVANCE_INTERVAL_MS)
+
+            if (pagerState.isScrollInProgress) continue
+
+            val nextPage = pagerState.currentPage + 1
+            if (nextPage > onboardingItems.lastIndex) continue
+
+            pagerState.animateScrollToPage(
+                page = nextPage,
+                animationSpec = tween(
+                    durationMillis = 650,
+                    easing = FastOutSlowInEasing
+                )
+            )
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black)
+    ) {
 
         HorizontalPager(
             state = pagerState,
-            // Swiping is the primary navigation, so no Next button is needed.
+            // Swiping stays available at any time; the carousel also advances itself.
             userScrollEnabled = true,
             beyondViewportPageCount = 1,
+            contentPadding = PaddingValues(horizontal = 32.dp, vertical = 10.dp),
+            pageSpacing = 10.dp,
             modifier = Modifier.fillMaxSize()
         ) { page ->
             OnboardingPage(
@@ -140,6 +173,14 @@ fun OnboardingPage(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .graphicsLayer {
+                // Neighbouring cards sit slightly back and dimmed, like a deck.
+                val cardScale = 1f - absOffset * 0.08f
+                scaleX = cardScale
+                scaleY = cardScale
+                alpha = 1f - absOffset * 0.28f
+            }
+            .clip(RoundedCornerShape(28.dp))
             .background(item.backgroundColor)
     ) {
         Image(
