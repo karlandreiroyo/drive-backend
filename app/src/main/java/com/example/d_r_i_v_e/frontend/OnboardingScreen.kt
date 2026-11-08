@@ -1,6 +1,10 @@
 package com.example.d_r_i_v_e.frontend
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -124,9 +128,14 @@ fun OnboardingPage(
     onFinishClick: () -> Unit,
     onLoginClick: () -> Unit
 ) {
-    val pageOffset = remember(pagerState.currentPage, pagerState.currentPageOffsetFraction, page) {
-        ((pagerState.currentPage - page) + pagerState.currentPageOffsetFraction).absoluteValue
+    // Signed page offset: 0 when settled on this page, -1 when this page is
+    // one full screen to the right, +1 when it is one screen to the left.
+    val pageOffset by remember(pagerState) {
+        derivedStateOf {
+            (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
+        }
     }
+    val absOffset = pageOffset.absoluteValue.coerceIn(0f, 1f)
 
     Box(
         modifier = Modifier
@@ -140,9 +149,13 @@ fun OnboardingPage(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    alpha = 1f - (pageOffset * 0.3f).coerceIn(0f, 0.3f)
-                    scaleX = 1f + (pageOffset * 0.05f)
-                    scaleY = 1f + (pageOffset * 0.05f)
+                    // Artwork trails the finger, so the text appears to slide
+                    // over it at a faster, layered speed.
+                    translationX = -pageOffset * size.width * 0.10f
+                    val scale = 1.24f - absOffset * 0.04f
+                    scaleX = scale
+                    scaleY = scale
+                    alpha = 1f - absOffset * 0.15f
                 }
         )
 
@@ -167,8 +180,9 @@ fun OnboardingPage(
                 .windowInsetsPadding(WindowInsets.navigationBars)
                 .padding(bottom = 24.dp, start = 32.dp, end = 32.dp)
                 .graphicsLayer {
-                    alpha = 1f - pageOffset.coerceIn(0f, 1f)
-                    translationY = pageOffset * 40f
+                    alpha = 1f - absOffset * 0.35f
+                    translationX = pageOffset * size.width * 0.18f
+                    translationY = absOffset * 28.dp.toPx()
                 },
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -177,7 +191,11 @@ fun OnboardingPage(
                 color = Color.White,
                 fontSize = 26.sp,
                 fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
+                textAlign = TextAlign.Center,
+                modifier = Modifier.graphicsLayer {
+                    translationX = pageOffset * 32.dp.toPx()
+                    alpha = 1f - absOffset * 0.5f
+                }
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -187,7 +205,11 @@ fun OnboardingPage(
                 color = Color.White.copy(alpha = 0.85f),
                 fontSize = 14.sp,
                 textAlign = TextAlign.Center,
-                lineHeight = 20.sp
+                lineHeight = 20.sp,
+                modifier = Modifier.graphicsLayer {
+                    translationX = pageOffset * 16.dp.toPx()
+                    alpha = 1f - absOffset * 0.4f
+                }
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -251,15 +273,25 @@ fun DotsIndicator(
     ) {
         repeat(totalDots) { index ->
             val isSelected = index == selectedIndex
+            val dotWidth by animateDpAsState(
+                targetValue = if (isSelected) 20.dp else 6.dp,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessMediumLow
+                ),
+                label = "dotWidth"
+            )
+            val dotColor by animateColorAsState(
+                targetValue = if (isSelected) Color.White else Color.White.copy(alpha = 0.4f),
+                label = "dotColor"
+            )
             Box(
                 modifier = Modifier
                     .padding(horizontal = 3.dp)
                     .height(6.dp)
-                    .width(if (isSelected) 20.dp else 6.dp)
+                    .width(dotWidth)
                     .clip(RoundedCornerShape(50))
-                    .background(
-                        if (isSelected) Color.White else Color.White.copy(alpha = 0.4f)
-                    )
+                    .background(dotColor)
             )
         }
     }
