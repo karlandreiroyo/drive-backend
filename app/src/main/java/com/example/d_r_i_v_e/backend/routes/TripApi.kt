@@ -232,11 +232,13 @@ class TripHistoryViewModel : ViewModel() {
 
     private var refreshing = false
     private var lastSessionStartedAt: Long? = null
+    private var generation = 0
 
     fun refresh(sessionStartedAt: Long?) {
         if (refreshing) return
         refreshing = true
         lastSessionStartedAt = sessionStartedAt
+        val requestGeneration = generation
 
         viewModelScope.launch {
             try {
@@ -247,6 +249,9 @@ class TripHistoryViewModel : ViewModel() {
                     0 to null
                 }
 
+                // Drop responses that arrive after sign-out cleared the state.
+                if (requestGeneration != generation) return@launch
+
                 _state.update { previous ->
                     previous.copy(
                         isLoading = false,
@@ -256,9 +261,16 @@ class TripHistoryViewModel : ViewModel() {
                     )
                 }
             } finally {
-                refreshing = false
+                if (requestGeneration == generation) refreshing = false
             }
         }
+    }
+
+    fun clear() {
+        generation++
+        refreshing = false
+        lastSessionStartedAt = null
+        _state.value = TripHistoryUiState()
     }
 
     fun deleteTrip(tripId: String) {

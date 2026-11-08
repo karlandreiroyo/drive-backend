@@ -9,12 +9,18 @@ import com.example.d_r_i_v_e.backend.AuthSession
 import com.example.d_r_i_v_e.backend.AuthViewModel
 import com.example.d_r_i_v_e.backend.OtpViewModel
 import com.example.d_r_i_v_e.backend.OtpUiState
+import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
 import com.example.d_r_i_v_e.backend.routes.ReportViewModel
+import com.example.d_r_i_v_e.backend.routes.TripHistoryViewModel
+
+private val mainTabScreens = setOf("dashboard", "liveFeed", "tripHistory", "settings")
 
 @Composable
 fun AppNavigation() {
     val context = LocalContext.current
     val otpViewModel: OtpViewModel = viewModel()
+    val detectionViewModel: DetectionViewModel = viewModel()
+    val tripHistoryViewModel: TripHistoryViewModel = viewModel()
     val otpState by otpViewModel.state.collectAsState()
     var otpIdentifier by remember { mutableStateOf("") }
     var otpCode by remember { mutableStateOf("") }
@@ -31,7 +37,14 @@ fun AppNavigation() {
     val currentScreen = screenHistory.last()
 
     fun navigateTo(screen: String) {
-        screenHistory = screenHistory + screen
+        if (screen == screenHistory.last()) return
+        // Tab switches replace the stack; detail screens push onto it.
+        screenHistory = if (screen in mainTabScreens) listOf(screen) else screenHistory + screen
+    }
+
+    // Equivalent of popUpTo(0) { inclusive = true } for this manual stack.
+    fun resetTo(screen: String) {
+        screenHistory = listOf(screen)
     }
 
     fun goBack() {
@@ -40,22 +53,14 @@ fun AppNavigation() {
         }
     }
 
-    BackHandler(enabled = screenHistory.size > 1) {
-        goBack()
-    }
-
-    // Restore the saved session before choosing the first screen, then react to
-    // any 401 from a protected endpoint by returning to login.
-    LaunchedEffect(Unit) {
-        AuthSession.restore(context)
-        if (!AuthSession.token.isNullOrBlank()) {
-            screenHistory = listOf("dashboard")
-        }
-        AuthSession.expiredEvents.collect {
-            AuthSession.clear(context)
-            screenHistory = listOf("auth")
-            Toast.makeText(context, "Session expired. Please log in again.", Toast.LENGTH_LONG).show()
-        }
+    BackHandler(
+        enabled = screenHistory.size > 1 ||
+            (screenHistory.size == 1 && currentScreen in mainTabScreens && currentScreen != "dashboard")
+    ) {
+        // Back from a secondary tab returns to Dashboard; back on any root
+        // falls through to the system so the app closes instead of leaking
+        // into another auth state.
+        if (screenHistory.size > 1) goBack() else resetTo("dashboard")
     }
 
     // Only leave Forgot Password once the code request actually succeeds.
@@ -106,6 +111,34 @@ fun AppNavigation() {
     val reportViewModel: ReportViewModel = viewModel()
     val reportState by reportViewModel.state.collectAsState()
 
+    // Full sign-out: drop stored credentials and user-scoped state before the
+    // navigation host replaces the stack with the unauthenticated root.
+    fun clearSession() {
+        AuthSession.clear(context)
+        detectionViewModel.resetSession()
+        tripHistoryViewModel.clear()
+        welcomeName = null
+        selectedGoogleAccount = null
+        knownAccounts = emptyList()
+        showAccountChooser = false
+        isOnline = false
+        isHardwareConnected = false
+    }
+
+    // Restore the saved session before choosing the first screen, then react to
+    // any 401 from a protected endpoint by returning to login.
+    LaunchedEffect(Unit) {
+        AuthSession.restore(context)
+        if (!AuthSession.token.isNullOrBlank()) {
+            resetTo("dashboard")
+        }
+        AuthSession.expiredEvents.collect {
+            clearSession()
+            resetTo("auth")
+            Toast.makeText(context, "Session expired. Please log in again.", Toast.LENGTH_LONG).show()
+        }
+    }
+
     when (currentScreen) {
         "onboarding" -> OnboardingScreen(
             onFinished = { navigateTo("auth") },
@@ -144,7 +177,8 @@ fun AppNavigation() {
             onBackClick = { goBack() },
             onLoginSuccess = {
                 welcomeName = AuthSession.user?.fullName?.trim()?.takeIf { it.isNotBlank() }
-                navigateTo("dashboard")
+                // Lock the dashboard as the root so Back can never reach Login.
+                resetTo("dashboard")
             },
             onUnverified = { email ->
                 otpIdentifier = email.trim().lowercase()
@@ -285,8 +319,10 @@ fun AppNavigation() {
 
         "settings" -> SettingsScreen(
             onLogoutClick = {
-                AuthSession.clear(context)
-                navigateTo("auth")
+                clearSession()
+                // Clear the whole stack so Back exits the app, never the
+                // Settings/Dashboard screens.
+                resetTo("auth")
             },
             onAccountProfileClick = { navigateTo("accountProfile") },
             onCalibrateDeviceClick = { navigateTo("calibrateDevice") },
