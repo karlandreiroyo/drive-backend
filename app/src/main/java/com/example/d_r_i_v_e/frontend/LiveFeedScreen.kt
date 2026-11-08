@@ -1,14 +1,24 @@
 package com.example.d_r_i_v_e.frontend
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -20,6 +30,7 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -36,9 +47,17 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.d_r_i_v_e.backend.routes.DetectionEvent
+import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
+import com.example.d_r_i_v_e.backend.routes.UploadStatus
+import com.example.d_r_i_v_e.ml.DetectionAnalyzer
+import com.example.d_r_i_v_e.ml.DetectionResult
+import com.example.d_r_i_v_e.ml.MotionDetector
 import kotlinx.coroutines.delay
 import java.util.Locale
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
 
 @Composable
 fun LiveFeedScreen(
@@ -51,6 +70,18 @@ fun LiveFeedScreen(
     var elapsedSeconds by remember { mutableLongStateOf(0L) }
 
     val context = LocalContext.current
+    val detectionViewModel: DetectionViewModel = viewModel()
+    val detectionCount by detectionViewModel.sessionDetectionCount.collectAsState()
+    val lastEvent by detectionViewModel.lastEvent.collectAsState()
+    val uploadStatus by detectionViewModel.uploadStatus.collectAsState()
+    val uploadError by detectionViewModel.uploadError.collectAsState()
+
+    // Latest detection kept for the exit animation of the banner.
+    var showAlert by remember { mutableStateOf(false) }
+    var alertEvent by remember { mutableStateOf<DetectionEvent?>(null) }
+
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
+
     var hasCameraPermission by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(
@@ -69,6 +100,14 @@ fun LiveFeedScreen(
         if (granted) isDrivingActive = true
     }
 
+    LaunchedEffect(lastEvent) {
+        val event = lastEvent ?: return@LaunchedEffect
+        alertEvent = event
+        showAlert = true
+        delay(4_000)
+        showAlert = false
+    }
+
     LaunchedEffect(isDrivingActive) {
         if (isDrivingActive) {
             elapsedSeconds = 0L
@@ -79,6 +118,15 @@ fun LiveFeedScreen(
         } else {
             elapsedSeconds = 0L
         }
+    }
+
+    // Fired on the camera analyzer thread; UI feedback is posted to the main thread.
+    val onFrameDetection: (DetectionResult) -> Unit = { result ->
+        mainHandler.post {
+            vibrateAlert(context)
+            Toast.makeText(context, "${result.label} detected", Toast.LENGTH_SHORT).show()
+        }
+        detectionViewModel.onDetection(result)
     }
 
     Box(
@@ -140,7 +188,10 @@ fun LiveFeedScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         if (isDrivingActive && hasCameraPermission) {
-                            CameraPreview(modifier = Modifier.fillMaxSize())
+                            CameraPreview(
+                                onDetection = onFrameDetection,
+                                modifier = Modifier.fillMaxSize()
+                            )
                             LiveBadge(
                                 modifier = Modifier
                                     .align(Alignment.TopStart)
@@ -190,6 +241,47 @@ fun LiveFeedScreen(
                         )
                     }
 
+                    // Detection alert banner
+                    AnimatedVisibility(visible = showAlert) {
+                        alertEvent?.let { event ->
+                            Spacer(modifier = Modifier.height(10.dp))
+                            DetectionAlertBanner(
+                                event = event,
+                                uploadStatus = uploadStatus
+                            )
+                        }
+                    }
+
+                    // Sync summary
+                    if (isDrivingActive && detectionCount > 0) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = buildString {
+                                append(detectionCount)
+                                append(if (detectionCount == 1) " detection logged" else " detections logged")
+                                append(" · ")
+                                append(uploadLabel(uploadStatus))
+                            },
+                            color = if (uploadStatus == UploadStatus.Failed) {
+                                Color(0xFFFF6B6B)
+                            } else {
+                                Color.White.copy(alpha = 0.5f)
+                            },
+                            fontSize = 11.sp,
+                            modifier = Modifier.align(Alignment.CenterHorizontally)
+                        )
+                    }
+
+                    if (isDrivingActive && uploadError != null && uploadStatus == UploadStatus.Failed) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = uploadError ?: "",
+                            color = Color(0xFFFF6B6B).copy(alpha = 0.8f),
+                            fontSize = 11.sp,
+                            modifier = Modifier.align(Alignment.CenterHorizontally)
+                        )
+                    }
+
                     Spacer(modifier = Modifier.height(12.dp))
 
                     // Metrics Row
@@ -221,6 +313,8 @@ fun LiveFeedScreen(
                         onClick = {
                             if (isDrivingActive) {
                                 isDrivingActive = false
+                                showAlert = false
+                                detectionViewModel.resetSession()
                             } else if (hasCameraPermission) {
                                 permissionDenied = false
                                 isDrivingActive = true
@@ -280,7 +374,81 @@ fun LiveFeedScreen(
 }
 
 @Composable
-private fun CameraPreview(modifier: Modifier = Modifier) {
+private fun DetectionAlertBanner(
+    event: DetectionEvent,
+    uploadStatus: UploadStatus
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0x33FF4C4C))
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Warning,
+            contentDescription = null,
+            tint = Color(0xFFFF6B6B),
+            modifier = Modifier.size(22.dp)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "${event.label} detected",
+                color = Color(0xFFFF8A8A),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "${(event.confidence * 100).toInt()}% confidence",
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 11.sp
+            )
+        }
+        Text(
+            text = uploadLabel(uploadStatus),
+            color = when (uploadStatus) {
+                UploadStatus.Sent -> Color(0xFF4CD964)
+                UploadStatus.Failed -> Color(0xFFFF6B6B)
+                else -> Color.White.copy(alpha = 0.6f)
+            },
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+private fun uploadLabel(status: UploadStatus): String = when (status) {
+    UploadStatus.Idle -> ""
+    UploadStatus.Sending -> "Syncing…"
+    UploadStatus.Sent -> "Synced"
+    UploadStatus.Failed -> "Not synced"
+}
+
+private fun vibrateAlert(context: Context) {
+    val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+    } else {
+        @Suppress("DEPRECATION")
+        context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+    }
+    if (vibrator == null || !vibrator.hasVibrator()) return
+
+    val pattern = longArrayOf(0, 250, 120, 250)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))
+    } else {
+        @Suppress("DEPRECATION")
+        vibrator.vibrate(pattern, -1)
+    }
+}
+
+@Composable
+private fun CameraPreview(
+    onDetection: (DetectionResult) -> Unit,
+    modifier: Modifier = Modifier
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val previewView = remember {
@@ -290,6 +458,16 @@ private fun CameraPreview(modifier: Modifier = Modifier) {
         }
     }
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
+    val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
+    val latestOnDetection = rememberUpdatedState(onDetection)
+
+    // Swap MotionDetector for a TensorFlow Lite FrameDetector once the model ships.
+    val analyzer = remember {
+        DetectionAnalyzer(
+            detector = MotionDetector(),
+            onDetection = { result -> latestOnDetection.value(result) }
+        )
+    }
 
     DisposableEffect(lifecycleOwner) {
         val executor: Executor = ContextCompat.getMainExecutor(context)
@@ -302,12 +480,18 @@ private fun CameraPreview(modifier: Modifier = Modifier) {
                 .build()
                 .also { it.surfaceProvider = previewView.surfaceProvider }
 
+            val imageAnalysis = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+                .also { it.setAnalyzer(analysisExecutor, analyzer) }
+
             try {
                 cameraProvider.unbindAll()
                 cameraProvider.bindToLifecycle(
                     lifecycleOwner,
-                    CameraSelector.DEFAULT_BACK_CAMERA,
-                    preview
+                    CameraSelector.DEFAULT_FRONT_CAMERA,
+                    preview,
+                    imageAnalysis
                 )
             } catch (e: Exception) {
                 Log.e("LiveFeedScreen", "Unable to start camera preview", e)
@@ -321,6 +505,8 @@ private fun CameraPreview(modifier: Modifier = Modifier) {
             if (cameraProviderFuture.isDone) {
                 runCatching { cameraProviderFuture.get().unbindAll() }
             }
+            analyzer.close()
+            analysisExecutor.shutdown()
         }
     }
 

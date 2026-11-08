@@ -7,6 +7,7 @@ import { supabase } from './lib/supabase.js';
 import signupRouter from './routes/signupBackend.js';
 import otpRouter from './routes/otpRoutes.js';
 import reportsRouter from './routes/reportsRoutes.js';
+import detectionsRouter from './routes/detectionsRoutes.js';
 
 const app: Application = express();
 
@@ -24,6 +25,16 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
 const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 80,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, message: 'Too many requests. Please try again later.' },
+});
+
+// Detections can arrive several times per driving session, so they get a
+// larger budget than the auth/report limiter.
+const detectionLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 600,
     standardHeaders: true,
     legacyHeaders: false,
     message: { success: false, message: 'Too many requests. Please try again later.' },
@@ -49,6 +60,7 @@ app.get('/api/health', async (_req: Request, res: Response) => {
 app.use('/api/auth', authLimiter, signupRouter);
 app.use('/api/auth', authLimiter, otpRouter);
 app.use('/api', authLimiter, reportsRouter);
+app.use('/api', detectionLimiter, detectionsRouter);
 
 app.use((_req: Request, res: Response) => {
     res.status(404).json({

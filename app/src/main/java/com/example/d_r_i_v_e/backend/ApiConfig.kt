@@ -22,18 +22,30 @@ object ApiConfig {
     // Emulator loopback: reaches the host machine running the backend.
     const val EMULATOR_URL = "http://10.0.2.2:5000/"
 
-    // Physical-device candidate LAN IPs, tried in order.
-    private val PHYSICAL_CANDIDATES = listOf(
-        "http://10.236.218.212:5000/",
-        "http://127.0.0.1:5000/",
-        "http://172.29.100.212:5000/",
-        "http://192.168.254.116:5000/",
-        "http://192.168.254.114:5000/",
-        "http://192.168.254.120:5000/",
-        "http://192.168.68.120:5000/",
-        "http://192.168.1.100:5000/",
-        "http://192.168.100.100:5000/"
-    )
+    // Public backend on Railway. Paste your service URL after deploying,
+    // e.g. "https://drive-backend-production.up.railway.app/".
+    // It is probed first and wins over LAN IPs whenever it is set.
+    private const val RAILWAY_URL = ""
+
+    // Physical-device candidates, tried in order after the Railway URL.
+    private val PHYSICAL_CANDIDATES: List<String> = buildList {
+        RAILWAY_URL.trim().takeIf { it.isNotEmpty() }?.let { url ->
+            add(if (url.endsWith("/")) url else "$url/")
+        }
+        addAll(
+            listOf(
+                "http://10.236.218.212:5000/",
+                "http://127.0.0.1:5000/",
+                "http://172.29.100.212:5000/",
+                "http://192.168.254.116:5000/",
+                "http://192.168.254.114:5000/",
+                "http://192.168.254.120:5000/",
+                "http://192.168.68.120:5000/",
+                "http://192.168.1.100:5000/",
+                "http://192.168.100.100:5000/"
+            )
+        )
+    }
 
     // Flip to true to force the emulator loopback URL on a physical device.
     const val FORCE_EMULATOR_URL = false
