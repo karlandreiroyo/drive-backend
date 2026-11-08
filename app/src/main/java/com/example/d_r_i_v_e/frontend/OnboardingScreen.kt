@@ -49,7 +49,9 @@ fun OnboardingScreen(
 
         HorizontalPager(
             state = pagerState,
-            userScrollEnabled = false,
+            // Swiping is the primary navigation, so no Next button is needed.
+            userScrollEnabled = true,
+            beyondViewportPageCount = 1,
             modifier = Modifier.fillMaxSize()
         ) { page ->
             OnboardingPage(
@@ -59,18 +61,7 @@ fun OnboardingScreen(
                 totalPages = onboardingItems.size,
                 pagerState = pagerState,
                 page = page,
-                onNextClick = {
-                    if (onboardingItems[page].isLastPage) {
-                        onFinished()
-                    } else {
-                        scope.launch {
-                            pagerState.animateScrollToPage(
-                                page = page + 1,
-                                animationSpec = tween(durationMillis = 500)
-                            )
-                        }
-                    }
-                },
+                onFinishClick = onFinished,
                 onLoginClick = onLoginClick
             )
         }
@@ -130,7 +121,7 @@ fun OnboardingPage(
     totalPages: Int,
     pagerState: PagerState,
     page: Int,
-    onNextClick: () -> Unit,
+    onFinishClick: () -> Unit,
     onLoginClick: () -> Unit
 ) {
     val pageOffset = remember(pagerState.currentPage, pagerState.currentPageOffsetFraction, page) {
@@ -208,23 +199,25 @@ fun OnboardingPage(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            Button(
-                onClick = onNextClick,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-                shape = RoundedCornerShape(28.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F0B94))
-            ) {
-                Text(
-                    text = if (isLastPage) "Get Started" else "Next",
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-
             if (isLastPage) {
+                // The last page has nowhere to swipe to, so it keeps the CTA
+                // that completes onboarding.
+                Button(
+                    onClick = onFinishClick,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    shape = RoundedCornerShape(28.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F0B94))
+                ) {
+                    Text(
+                        text = "Get Started",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
                     text = "I already have an account",
@@ -234,6 +227,12 @@ fun OnboardingPage(
                         .clip(RoundedCornerShape(4.dp))
                         .clickable { onLoginClick() }
                         .padding(6.dp)
+                )
+            } else {
+                Text(
+                    text = "Swipe to continue",
+                    color = Color.White.copy(alpha = 0.65f),
+                    fontSize = 13.sp
                 )
             }
         }
