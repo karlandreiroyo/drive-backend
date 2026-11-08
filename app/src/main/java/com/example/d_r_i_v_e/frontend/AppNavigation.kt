@@ -212,6 +212,9 @@ fun AppNavigation() {
                 val verified = otpState as? OtpUiState.Verified
                 if (verified != null) {
                     otpResetToken = verified.resetToken
+                    // Use the canonical identifier the server verified instead
+                    // of whatever was typed into the previous screen.
+                    verified.identifier?.let { otpIdentifier = it }
                     otpViewModel.reset()
                     if (otpPurpose == "signup") {
                         Toast.makeText(context, "Email verified! You can now log in.", Toast.LENGTH_LONG).show()

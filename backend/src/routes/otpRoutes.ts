@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcrypt';
 import { supabase } from '../lib/supabase.js';
+import { env } from '../config/env.js';
 import { createAndSendOtp, checkCode, isSmsConfigured, OtpPurpose } from './otpService.js';
 import { passwordError, resolveIdentifier, ResolvedIdentifier } from '../lib/validators.js';
 import { publicUser, signResetToken, verifyResetToken } from '../lib/jwt.js';
@@ -22,6 +23,10 @@ function readIdentifier(body: Record<string, unknown>): string {
     return String(raw).trim();
 }
 
+// PostgREST passes the operand of `ilike` straight to SQL LIKE, so wildcards
+// present in the address itself must be escaped to keep the match literal.
+const escapeLikePattern = (value: string) => value.replace(/[\\%_]/g, (m) => `\\${m}`);
+
 async function findUserByIdentifier(
     resolved: ResolvedIdentifier
 ): Promise<{ user: UserRow | null; error: string | null }> {
@@ -29,10 +34,16 @@ async function findUserByIdentifier(
         const { data, error } = await supabase
             .from('users')
             .select('*')
-            .eq('email', resolved.identifier)
-            .maybeSingle();
+            .ilike('email', escapeLikePattern(resolved.identifier))
+            .limit(2);
         if (error) return { user: null, error: error.message };
-        return { user: (data as UserRow | null) ?? null, error: null };
+        if (!data || data.length === 0) {
+            return { user: null, error: null };
+        }
+        if (data.length > 1) {
+            console.warn(`[users] Multiple rows match email ${resolved.identifier}; using id ${data[0].id}.`);
+        }
+        return { user: data[0] as UserRow, error: null };
     }
 
     const { data, error } = await supabase
@@ -85,6 +96,9 @@ router.post('/verify-otp', async (req, res) => {
         return res.json({
             success: true,
             message: purpose === 'signup' ? 'Email verified successfully!' : 'Code verified.',
+            // Canonical form of what was verified, so the client never has to
+            // guess how the user typed the address.
+            identifier: resolved.identifier,
             // Proof of verification for the reset flow; the client sends this
             // back to /reset-password instead of the identifier + code.
             resetToken: purpose === 'reset' ? signResetToken(resolved.identifier) : undefined,
@@ -223,17 +237,25 @@ router.post('/reset-password', async (req, res) => {
             }
         }
 
+        console.log(
+            `[reset-password] Resolved ${resolved.kind} "${resolved.identifier}" ` +
+            `via ${resetToken ? 'reset token' : 'identifier + code'}.`
+        );
+
         const { user, error: lookupError } = await findUserByIdentifier(resolved);
         if (lookupError) {
             console.error('Reset password lookup error:', lookupError);
             return res.status(500).json({ success: false, message: 'Server error. Please try again.' });
         }
         if (!user) {
-            return res.status(400).json({
+            console.warn(`[reset-password] No user row matches ${resolved.kind} "${resolved.identifier}".`);
+            return res.status(404).json({
                 success: false,
                 message: 'No account found for that email or phone number.',
             });
         }
+
+        console.log(`[reset-password] Updating password for user ${user.id} (${user.email}).`);
 
         const hashed = await bcrypt.hash(newPassword, 10);
         const { data, error } = await supabase
@@ -247,7 +269,32 @@ router.post('/reset-password', async (req, res) => {
             return res.status(500).json({ success: false, message: 'Server error. Please try again.' });
         }
         if (!data || data.length === 0) {
-            return res.status(404).json({ success: false, message: 'No account found for that email or phone number.' });
+            // `select('id')` after an update can come back empty when the
+            // RETURNING clause is filtered by RLS even though the write landed,
+            // so confirm against the stored hash before reporting failure.
+            const { data: saved } = await supabase
+                .from('users')
+                .select('password')
+                .eq('id', user.id)
+                .maybeSingle();
+
+            if (saved?.password === hashed) {
+                return res.json({ success: true, message: 'Password updated. You can now log in.' });
+            }
+
+            // The row was just read successfully and Supabase raised no error,
+            // so zero affected rows means the request ran without write
+            // permission (anon key or a restrictive RLS policy), not that the
+            // account is missing.
+            console.error(
+                `[reset-password] UPDATE affected 0 rows for user ${user.id}. ` +
+                `Supabase key role in use: ${env.supabaseKeyRole ?? 'unknown (non-JWT key)'}. ` +
+                'Set SUPABASE_SERVICE_ROLE_KEY to the service_role key.'
+            );
+            return res.status(500).json({
+                success: false,
+                message: 'We could not save your new password. Please try again.',
+            });
         }
 
         return res.json({ success: true, message: 'Password updated. You can now log in.' });

@@ -17,7 +17,8 @@ import java.io.IOException
 data class OtpBasicResponse(
     val success: Boolean = false,
     val message: String? = null,
-    val resetToken: String? = null
+    val resetToken: String? = null,
+    val identifier: String? = null
 )
 data class VerifyOtpRequest(val identifier: String, val code: String, val purpose: String)
 data class ResendOtpRequest(val identifier: String, val purpose: String)
@@ -56,7 +57,11 @@ object OtpApiClient {
 sealed interface OtpUiState {
     data object Idle : OtpUiState
     data object Loading : OtpUiState
-    data class Verified(val message: String, val resetToken: String? = null) : OtpUiState
+    data class Verified(
+        val message: String,
+        val resetToken: String? = null,
+        val identifier: String? = null
+    ) : OtpUiState
     data class Resent(val message: String) : OtpUiState
     data class PasswordReset(val message: String) : OtpUiState
     data class Error(val message: String) : OtpUiState
@@ -103,7 +108,7 @@ class OtpViewModel : ViewModel() {
                 OtpApiClient.service.verifyOtp(VerifyOtpRequest(identifier, code, purpose))
             }
             _state.value = if (ok) {
-                OtpUiState.Verified(msg, body?.resetToken)
+                OtpUiState.Verified(msg, body?.resetToken, body?.identifier)
             } else {
                 OtpUiState.Error(msg)
             }
@@ -136,7 +141,7 @@ class OtpViewModel : ViewModel() {
             _state.value = OtpUiState.Loading
             val (ok, msg) = execute {
                 OtpApiClient.service.resetPassword(
-                    ResetPasswordRequest(identifier, code, newPassword, resetToken)
+                    ResetPasswordRequest(identifier.trim().lowercase(), code, newPassword, resetToken)
                 )
             }
             _state.value = if (ok) OtpUiState.PasswordReset(msg) else OtpUiState.Error(msg)
