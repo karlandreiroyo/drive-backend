@@ -29,6 +29,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -81,32 +82,28 @@ fun OnboardingScreen(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-
-            // Only the slides move; pagination and actions stay fixed below.
-            HorizontalPager(
-                state = pagerState,
-                userScrollEnabled = true,
-                beyondViewportPageCount = 1,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            ) { page ->
-                OnboardingSlide(
-                    item = onboardingItems[page],
-                    pagerState = pagerState,
-                    page = page
-                )
-            }
-
-            OnboardingFooter(
-                totalPages = onboardingItems.size,
-                currentPage = pagerState.currentPage,
-                isLastPage = pagerState.currentPage == onboardingItems.lastIndex,
-                onFinishClick = onFinished,
-                onLoginClick = onLoginClick
+        // Slides fill the whole screen; the footer floats on top of them.
+        HorizontalPager(
+            state = pagerState,
+            userScrollEnabled = true,
+            beyondViewportPageCount = 1,
+            modifier = Modifier.fillMaxSize()
+        ) { page ->
+            OnboardingSlide(
+                item = onboardingItems[page],
+                pagerState = pagerState,
+                page = page
             )
         }
+
+        OnboardingFooter(
+            totalPages = onboardingItems.size,
+            currentPage = pagerState.currentPage,
+            isLastPage = pagerState.currentPage == onboardingItems.lastIndex,
+            onFinishClick = onFinished,
+            onLoginClick = onLoginClick,
+            modifier = Modifier.align(Alignment.BottomCenter)
+        )
 
         // Back button
         AnimatedVisibility(
@@ -173,6 +170,7 @@ private fun OnboardingSlide(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .clipToBounds()
             .background(item.backgroundColor)
     ) {
         Image(
@@ -188,7 +186,6 @@ private fun OnboardingSlide(
                     val scale = 1.2f - absOffset * 0.03f
                     scaleX = scale
                     scaleY = scale
-                    alpha = 1f - absOffset * 0.15f
                 }
         )
 
@@ -199,8 +196,8 @@ private fun OnboardingSlide(
                     Brush.verticalGradient(
                         colors = listOf(
                             Color.Transparent,
-                            Color.Black.copy(alpha = 0.35f),
-                            Color.Black.copy(alpha = 0.88f)
+                            Color.Black.copy(alpha = 0.45f),
+                            Color.Black.copy(alpha = 0.92f)
                         )
                     )
                 )
@@ -210,10 +207,11 @@ private fun OnboardingSlide(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(bottom = 28.dp, start = 32.dp, end = 32.dp)
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(bottom = 172.dp, start = 32.dp, end = 32.dp)
                 .graphicsLayer {
                     alpha = 1f - absOffset * 0.35f
-                    translationX = pageOffset * size.width * 0.18f
+                    translationX = pageOffset * 36.dp.toPx()
                     translationY = absOffset * 28.dp.toPx()
                 },
             horizontalAlignment = Alignment.CenterHorizontally
@@ -225,7 +223,7 @@ private fun OnboardingSlide(
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.graphicsLayer {
-                    translationX = pageOffset * 32.dp.toPx()
+                    translationX = pageOffset * 20.dp.toPx()
                     alpha = 1f - absOffset * 0.5f
                 }
             )
@@ -239,7 +237,7 @@ private fun OnboardingSlide(
                 textAlign = TextAlign.Center,
                 lineHeight = 20.sp,
                 modifier = Modifier.graphicsLayer {
-                    translationX = pageOffset * 16.dp.toPx()
+                    translationX = pageOffset * 10.dp.toPx()
                     alpha = 1f - absOffset * 0.4f
                 }
             )
@@ -253,10 +251,11 @@ private fun OnboardingFooter(
     currentPage: Int,
     isLastPage: Boolean,
     onFinishClick: () -> Unit,
-    onLoginClick: () -> Unit
+    onLoginClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .windowInsetsPadding(WindowInsets.navigationBars)
             .padding(start = 32.dp, end = 32.dp, top = 16.dp, bottom = 20.dp),
