@@ -167,6 +167,8 @@ router.post('/login', async (req: Request, res: Response): Promise<Response> => 
         const inputPassword = String(password).trim();
 
         // --- HARDCODED TEST ACCOUNT FOR INSTANT TESTING ---
+        // Fixed UUID so offline trips/incidents satisfy the UUID user_id schema.
+        const TEST_USER_ID = '00000000-0000-4000-8000-000000000000';
         if (
             (normalizedEmail === 'driver@vigil.com' || normalizedEmail === 'test@vigil.com') &&
             inputPassword === 'Driver@123'
@@ -175,9 +177,9 @@ router.post('/login', async (req: Request, res: Response): Promise<Response> => 
             return res.status(200).json({
                 success: true,
                 message: 'Login successful',
-                token: signAuthToken('0', normalizedEmail),
+                token: signAuthToken(TEST_USER_ID, normalizedEmail),
                 user: {
-                    id: '0',
+                    id: TEST_USER_ID,
                     fullName: 'Test Driver',
                     email: normalizedEmail,
                     phoneNumber: '09123456789',

@@ -7,9 +7,10 @@ import androidx.camera.core.ImageProxy
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Runs [detector] on a background executor, throttling analysis to
- * [minFrameIntervalMs] and suppressing repeat alerts for [alertCooldownMs]
- * so one continuous event does not flood the UI or the backend.
+ * On-device camera analyzer: runs [detector] on a background executor,
+ * throttling analysis to [minFrameIntervalMs] and suppressing repeat alerts
+ * for [alertCooldownMs]. It never touches the network; the callback persists
+ * the incident locally and lets the sync worker handle uploads.
  */
 class DetectionAnalyzer(
     private val detector: FrameDetector,

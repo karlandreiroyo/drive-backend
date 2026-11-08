@@ -1,14 +1,7 @@
 package com.example.d_r_i_v_e.frontend
 
 import android.Manifest
-import android.content.Context
 import android.content.pm.PackageManager
-import android.os.Build
-import android.os.Handler
-import android.os.Looper
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.os.VibratorManager
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -52,9 +45,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.d_r_i_v_e.alerts.rememberLocalAlertManager
 import com.example.d_r_i_v_e.backend.routes.DetectionEvent
 import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
-import com.example.d_r_i_v_e.backend.routes.UploadStatus
+import com.example.d_r_i_v_e.backend.routes.LocalLogStatus
 import com.example.d_r_i_v_e.ml.DetectionAnalyzer
 import com.example.d_r_i_v_e.ml.DetectionResult
 import com.example.d_r_i_v_e.ml.MotionDetector
@@ -77,15 +71,14 @@ fun LiveFeedScreen(
     val detectionViewModel: DetectionViewModel = viewModel()
     val detectionCount by detectionViewModel.sessionDetectionCount.collectAsState()
     val lastEvent by detectionViewModel.lastEvent.collectAsState()
-    val uploadStatus by detectionViewModel.uploadStatus.collectAsState()
-    val uploadError by detectionViewModel.uploadError.collectAsState()
+    val logStatus by detectionViewModel.logStatus.collectAsState()
+    val statusMessage by detectionViewModel.statusMessage.collectAsState()
 
     // Latest detection kept for the exit animation of the banner.
     var showAlert by remember { mutableStateOf(false) }
     var alertEvent by remember { mutableStateOf<DetectionEvent?>(null) }
 
-    val alertSpeaker = rememberDetectionAlertSpeaker()
-    val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    val localAlertManager = rememberLocalAlertManager()
 
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -103,8 +96,7 @@ fun LiveFeedScreen(
         hasCameraPermission = granted
         permissionDenied = !granted
         if (granted) {
-            detectionViewModel.startSession()
-            isDrivingActive = true
+            detectionViewModel.startSession { isDrivingActive = true }
         }
     }
 
@@ -128,12 +120,10 @@ fun LiveFeedScreen(
         }
     }
 
-    // Fired on the camera analyzer thread; UI feedback is posted to the main thread.
+    // Fired on the camera analyzer thread. The alarm chain is fully on-device;
+    // the ViewModel only writes to Room and lets WorkManager handle the upload.
     val onFrameDetection: (DetectionResult) -> Unit = { result ->
-        mainHandler.post {
-            vibrateAlert(context)
-            alertSpeaker.triggerDetectionAlert("Warning! ${result.label} detected")
-        }
+        localAlertManager.triggerDetectionAlert(result.label, result.confidence)
         detectionViewModel.onDetection(result)
     }
 
@@ -256,9 +246,9 @@ fun LiveFeedScreen(
                                 append(detectionCount)
                                 append(if (detectionCount == 1) " detection logged" else " detections logged")
                                 append(" · ")
-                                append(uploadLabel(uploadStatus))
+                                append(logLabel(logStatus))
                             },
-                            color = if (uploadStatus == UploadStatus.Failed) {
+                            color = if (logStatus == LocalLogStatus.Failed) {
                                 Color(0xFFFF6B6B)
                             } else {
                                 Color.White.copy(alpha = 0.5f)
@@ -268,10 +258,10 @@ fun LiveFeedScreen(
                         )
                     }
 
-                    if (isDrivingActive && uploadError != null && uploadStatus == UploadStatus.Failed) {
+                    if (isDrivingActive && statusMessage != null && logStatus == LocalLogStatus.Failed) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = uploadError ?: "",
+                            text = statusMessage ?: "",
                             color = Color(0xFFFF6B6B).copy(alpha = 0.8f),
                             fontSize = 11.sp,
                             modifier = Modifier.align(Alignment.CenterHorizontally)
@@ -315,8 +305,7 @@ fun LiveFeedScreen(
                                 }
                             } else if (hasCameraPermission) {
                                 permissionDenied = false
-                                detectionViewModel.startSession()
-                                isDrivingActive = true
+                                detectionViewModel.startSession { isDrivingActive = true }
                             } else {
                                 permissionLauncher.launch(Manifest.permission.CAMERA)
                             }
@@ -383,7 +372,7 @@ fun LiveFeedScreen(
             alertEvent?.let { event ->
                 DetectionAlertBanner(
                     event = event,
-                    uploadStatus = uploadStatus
+                    logStatus = logStatus
                 )
             }
         }
@@ -393,7 +382,7 @@ fun LiveFeedScreen(
 @Composable
 private fun DetectionAlertBanner(
     event: DetectionEvent,
-    uploadStatus: UploadStatus
+    logStatus: LocalLogStatus
 ) {
     Row(
         modifier = Modifier
@@ -434,10 +423,10 @@ private fun DetectionAlertBanner(
             )
         }
         Text(
-            text = uploadLabel(uploadStatus),
-            color = when (uploadStatus) {
-                UploadStatus.Sent -> Color(0xFF4CD964)
-                UploadStatus.Failed -> Color(0xFFFF6B6B)
+            text = logLabel(logStatus),
+            color = when (logStatus) {
+                LocalLogStatus.SavedOffline -> Color(0xFF4CD964)
+                LocalLogStatus.Failed -> Color(0xFFFF6B6B)
                 else -> Color.White.copy(alpha = 0.6f)
             },
             fontSize = 11.sp,
@@ -446,29 +435,11 @@ private fun DetectionAlertBanner(
     }
 }
 
-private fun uploadLabel(status: UploadStatus): String = when (status) {
-    UploadStatus.Idle -> ""
-    UploadStatus.Sending -> "Syncing…"
-    UploadStatus.Sent -> "Synced"
-    UploadStatus.Failed -> "Not synced"
-}
-
-private fun vibrateAlert(context: Context) {
-    val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
-    } else {
-        @Suppress("DEPRECATION")
-        context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-    }
-    if (vibrator == null || !vibrator.hasVibrator()) return
-
-    val pattern = longArrayOf(0, 250, 120, 250)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))
-    } else {
-        @Suppress("DEPRECATION")
-        vibrator.vibrate(pattern, -1)
-    }
+private fun logLabel(status: LocalLogStatus): String = when (status) {
+    LocalLogStatus.Idle -> ""
+    LocalLogStatus.Saving -> "Saving…"
+    LocalLogStatus.SavedOffline -> "Saved offline"
+    LocalLogStatus.Failed -> "Save failed"
 }
 
 @Composable

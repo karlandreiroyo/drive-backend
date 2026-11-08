@@ -17,7 +17,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,8 +34,6 @@ import com.example.d_r_i_v_e.backend.routes.TripHistoryViewModel
 import kotlinx.coroutines.delay
 import java.util.Locale
 
-private const val REFRESH_INTERVAL_MS = 5_000L
-
 @Composable
 fun TripHistoryScreen(
     onTabDashboardClick: () -> Unit = {},
@@ -51,13 +48,9 @@ fun TripHistoryScreen(
     val sessionStartedAt by detectionViewModel.sessionStartedAt.collectAsState()
     val liveIncidentCount by detectionViewModel.sessionDetectionCount.collectAsState()
 
-    // Poll while the tab is visible, and refresh right away whenever a new
-    // detection is logged so the badge stays in sync with the server.
-    LaunchedEffect(sessionStartedAt, liveIncidentCount) {
-        while (true) {
-            historyViewModel.refresh(sessionStartedAt)
-            delay(REFRESH_INTERVAL_MS)
-        }
+    // History streams from Room; opening the tab also nudges a background sync.
+    LaunchedEffect(Unit) {
+        historyViewModel.refresh()
     }
 
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -71,7 +64,7 @@ fun TripHistoryScreen(
 
     val startedAt = sessionStartedAt
     val elapsedSeconds = startedAt?.let { ((now - it) / 1_000).coerceAtLeast(0) } ?: 0L
-    val sessionIncidentCount = maxOf(state.sessionIncidentCount, liveIncidentCount)
+    val sessionIncidentCount = liveIncidentCount
 
     Box(
         modifier = Modifier
@@ -115,14 +108,6 @@ fun TripHistoryScreen(
                     ) {
                         CircularProgressIndicator(color = Color(0xFF4C6FFF))
                     }
-                }
-
-                if (state.error != null) {
-                    SyncErrorCard(
-                        message = state.error ?: "",
-                        onRetryClick = { historyViewModel.refresh(sessionStartedAt) }
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
                 }
 
                 state.trips.forEach { trip ->
@@ -209,7 +194,7 @@ private fun CurrentSessionCard(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Detections sync to your history automatically.",
+            text = "Trips and incidents are saved on this device and sync automatically.",
             color = Color.White.copy(alpha = 0.4f),
             fontSize = 11.sp
         )
@@ -231,31 +216,6 @@ private fun IncidentBadge(count: Int) {
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold
         )
-    }
-}
-
-@Composable
-private fun SyncErrorCard(
-    message: String,
-    onRetryClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFF2B1212))
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = message,
-            color = Color(0xFFFF8A8A),
-            fontSize = 12.sp,
-            modifier = Modifier.weight(1f)
-        )
-        TextButton(onClick = onRetryClick) {
-            Text(text = "Retry", color = Color(0xFFFFC107), fontSize = 12.sp)
-        }
     }
 }
 

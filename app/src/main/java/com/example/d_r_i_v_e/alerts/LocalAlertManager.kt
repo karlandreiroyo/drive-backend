@@ -1,8 +1,14 @@
-package com.example.d_r_i_v_e.frontend
+package com.example.d_r_i_v_e.alerts
 
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.MediaPlayer
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import androidx.compose.runtime.Composable
@@ -11,13 +17,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import com.example.d_r_i_v_e.R
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Plays the bundled alert tone and speaks the warning through the system TTS
- * engine. Owned by the Live Feed screen and released with it.
+ * Fires the on-device alarm chain: bundled tone, TTS warning, and vibration.
+ * Nothing here performs a network request, so alerts keep working with the
+ * radio off, no SIM, and no backend reachability.
  */
-class DetectionAlertSpeaker(context: Context) {
+class LocalAlertManager(context: Context) {
     private val appContext = context.applicationContext
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val released = AtomicBoolean(false)
 
     private var tts: TextToSpeech? = null
 
@@ -28,19 +38,16 @@ class DetectionAlertSpeaker(context: Context) {
     @Volatile
     private var pendingMessage: String? = null
 
-    @Volatile
-    private var released = false
-
     private var player: MediaPlayer? = null
 
     init {
         tts = TextToSpeech(appContext) { status ->
-            if (released) {
+            if (released.get()) {
                 tts?.shutdown()
                 return@TextToSpeech
             }
             if (status != TextToSpeech.SUCCESS) {
-                Log.w(TAG, "TTS init failed (status=$status); alert tone will still play.")
+                Log.w(TAG, "TTS init failed (status=$status); tone and vibration still fire.")
                 return@TextToSpeech
             }
             val engine = tts ?: return@TextToSpeech
@@ -70,26 +77,28 @@ class DetectionAlertSpeaker(context: Context) {
     }
 
     /**
-     * Plays the alert tone and voices [message], e.g.
-     * "Warning! Motion detected".
+     * Safe to call from the camera analyzer thread; playback and vibration are
+     * marshalled onto the main thread.
      */
-    fun triggerDetectionAlert(message: String) {
-        if (released) return
-
-        playAlertTone()
-
-        if (!ttsReady) {
-            // Queue only the latest alert so a slow engine does not speak a backlog.
-            pendingMessage = message
-            return
+    fun triggerDetectionAlert(label: String, confidence: Float) {
+        if (released.get()) return
+        val percent = (confidence.coerceIn(0f, 1f) * 100).toInt()
+        val message = "Warning! $label detected, $percent percent confidence"
+        mainHandler.post {
+            if (released.get()) return@post
+            playAlertTone()
+            speak(message)
+            vibrate()
         }
-        speak(message)
     }
 
     private fun speak(message: String) {
-        val engine = tts ?: return
-        // QUEUE_FLUSH drops any warning that is still being spoken.
-        engine.speak(message, TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
+        if (!ttsReady) {
+            // Keep only the latest warning so a slow engine cannot build a backlog.
+            pendingMessage = message
+            return
+        }
+        tts?.speak(message, TextToSpeech.QUEUE_FLUSH, null, UTTERANCE_ID)
     }
 
     private fun playAlertTone() {
@@ -135,6 +144,25 @@ class DetectionAlertSpeaker(context: Context) {
         }
     }
 
+    private fun vibrate() {
+        val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (appContext.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)
+                ?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            appContext.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        }
+        if (vibrator == null || !vibrator.hasVibrator()) return
+
+        val pattern = longArrayOf(0, 250, 120, 250)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(pattern, -1)
+        }
+    }
+
     private fun releasePlayer() {
         val current = player ?: return
         player = null
@@ -143,30 +171,31 @@ class DetectionAlertSpeaker(context: Context) {
     }
 
     fun release() {
-        if (released) return
-        released = true
+        if (!released.compareAndSet(false, true)) return
         pendingMessage = null
-        releasePlayer()
-        runCatching { tts?.stop() }
-        runCatching { tts?.shutdown() }
-        tts = null
-        ttsReady = false
+        mainHandler.post {
+            releasePlayer()
+            runCatching { tts?.stop() }
+            runCatching { tts?.shutdown() }
+            tts = null
+            ttsReady = false
+        }
     }
 
     private companion object {
-        const val TAG = "DetectionAlertSpeaker"
+        const val TAG = "LocalAlertManager"
         const val UTTERANCE_ID = "drive_detection_alert"
     }
 }
 
 @Composable
-fun rememberDetectionAlertSpeaker(): DetectionAlertSpeaker {
+fun rememberLocalAlertManager(): LocalAlertManager {
     val context = LocalContext.current
-    val speaker = remember(context.applicationContext) {
-        DetectionAlertSpeaker(context.applicationContext)
+    val manager = remember(context.applicationContext) {
+        LocalAlertManager(context.applicationContext)
     }
-    DisposableEffect(speaker) {
-        onDispose { speaker.release() }
+    DisposableEffect(manager) {
+        onDispose { manager.release() }
     }
-    return speaker
+    return manager
 }

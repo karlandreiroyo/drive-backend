@@ -1,294 +1,109 @@
 package com.example.d_r_i_v_e.backend.routes
 
+import android.app.Application
 import android.util.Log
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.d_r_i_v_e.Incident
 import com.example.d_r_i_v_e.TripEntry
-import com.example.d_r_i_v_e.backend.ApiConfig
 import com.example.d_r_i_v_e.backend.AuthSession
-import com.google.gson.Gson
-import com.google.gson.annotations.SerializedName
+import com.example.d_r_i_v_e.database.TripWithIncidents
+import com.example.d_r_i_v_e.repository.DriveRepository
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
-import retrofit2.Response
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
-import retrofit2.http.Body
-import retrofit2.http.DELETE
-import retrofit2.http.GET
-import retrofit2.http.POST
-import retrofit2.http.Path
-import retrofit2.http.Query
-import java.util.concurrent.TimeUnit
-
-data class TripIncidentDto(
-    @SerializedName("id") val id: String? = null,
-    @SerializedName("description") val description: String = "",
-    @SerializedName("time") val time: String = ""
-)
-
-data class TripDto(
-    @SerializedName("id") val id: String,
-    @SerializedName("date_label") val dateLabel: String = "",
-    @SerializedName("total_duration") val totalDuration: String = "",
-    @SerializedName("created_at") val createdAt: String? = null,
-    @SerializedName("trip_incidents") val incidents: List<TripIncidentDto>? = null
-)
-
-data class TripsResponse(
-    val success: Boolean = false,
-    val message: String? = null,
-    val trips: List<TripDto> = emptyList()
-)
-
-data class DetectionRowDto(
-    @SerializedName("id") val id: String,
-    @SerializedName("detection_type") val detectionType: String = "",
-    @SerializedName("confidence") val confidence: Double = 0.0,
-    @SerializedName("device_timestamp") val deviceTimestamp: Long? = null,
-    @SerializedName("created_at") val createdAt: String? = null
-)
-
-data class DetectionsResponse(
-    val success: Boolean = false,
-    val message: String? = null,
-    val count: Int = 0,
-    val detections: List<DetectionRowDto> = emptyList()
-)
-
-data class TripIncidentPayload(
-    val description: String,
-    val time: String
-)
-
-data class CreateTripRequest(
-    val dateLabel: String,
-    val totalDuration: String,
-    val incidents: List<TripIncidentPayload>
-)
-
-data class TripBasicResponse(
-    val success: Boolean = false,
-    val message: String? = null
-)
-
-interface TripApiService {
-    @GET("api/trips")
-    suspend fun getTrips(): Response<TripsResponse>
-
-    @GET("api/detections")
-    suspend fun getDetections(
-        @Query("since") since: Long,
-        @Query("limit") limit: Int = 100
-    ): Response<DetectionsResponse>
-
-    @POST("api/trips")
-    suspend fun saveTrip(@Body body: CreateTripRequest): Response<TripBasicResponse>
-
-    @DELETE("api/trips/{id}")
-    suspend fun deleteTrip(@Path("id") tripId: String): Response<TripBasicResponse>
-}
-
-object TripApiClient {
-    private const val TAG = "TripApiClient"
-
-    private val httpClient: OkHttpClient by lazy {
-        val logging = HttpLoggingInterceptor { message -> Log.d(TAG, message) }.apply {
-            level = HttpLoggingInterceptor.Level.BASIC
-        }
-        OkHttpClient.Builder()
-            .addInterceptor { chain ->
-                val builder = chain.request().newBuilder()
-                AuthSession.token?.let { builder.header("Authorization", "Bearer $it") }
-                chain.proceed(builder.build())
-            }
-            .addInterceptor(logging)
-            .connectTimeout(12, TimeUnit.SECONDS)
-            .readTimeout(12, TimeUnit.SECONDS)
-            .writeTimeout(12, TimeUnit.SECONDS)
-            .build()
-    }
-
-    private val service: TripApiService by lazy {
-        Retrofit.Builder()
-            .baseUrl(ApiConfig.BASE_URL)
-            .client(httpClient)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(TripApiService::class.java)
-    }
-
-    private fun errorMessage(response: Response<*>): String {
-        val raw = try {
-            response.errorBody()?.string()
-        } catch (e: Exception) {
-            null
-        }
-        return try {
-            raw?.let { Gson().fromJson(it, TripBasicResponse::class.java)?.message }
-                ?: "Request failed (${response.code()})."
-        } catch (e: Exception) {
-            "Request failed (${response.code()})."
-        }
-    }
-
-    private fun handleUnauthorized(response: Response<*>): Boolean {
-        if (response.code() == 401) {
-            AuthSession.notifySessionExpired()
-            return true
-        }
-        return false
-    }
-
-    private fun hasSession(): Boolean {
-        if (AuthSession.token.isNullOrBlank()) {
-            AuthSession.notifySessionExpired()
-            return false
-        }
-        return true
-    }
-
-    suspend fun fetchTrips(): Pair<List<TripDto>?, String?> {
-        if (!hasSession()) return null to "Please log in to view your trips."
-        return try {
-            val response = service.getTrips()
-            if (response.isSuccessful) {
-                response.body()?.trips.orEmpty() to null
-            } else {
-                handleUnauthorized(response)
-                null to errorMessage(response)
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "fetchTrips failed: ${e.message}", e)
-            null to "Can't reach the server. Check your connection."
-        }
-    }
-
-    suspend fun fetchSessionDetectionCount(since: Long): Pair<Int?, String?> {
-        if (!hasSession()) return null to "Please log in to view your trips."
-        return try {
-            val response = service.getDetections(since = since, limit = 200)
-            if (response.isSuccessful) {
-                response.body()?.count to null
-            } else {
-                handleUnauthorized(response)
-                null to errorMessage(response)
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "fetchSessionDetectionCount failed: ${e.message}", e)
-            null to "Can't reach the server. Check your connection."
-        }
-    }
-
-    suspend fun saveTrip(request: CreateTripRequest): Pair<Boolean, String?> {
-        if (!hasSession()) return false to "Please log in to save this trip."
-        return try {
-            val response = service.saveTrip(request)
-            if (response.isSuccessful) {
-                true to response.body()?.message
-            } else {
-                handleUnauthorized(response)
-                false to errorMessage(response)
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "saveTrip failed: ${e.message}", e)
-            false to "Can't reach the server. Check your connection."
-        }
-    }
-
-    suspend fun deleteTrip(tripId: String): Pair<Boolean, String?> {
-        if (!hasSession()) return false to "Please log in to manage your trips."
-        return try {
-            val response = service.deleteTrip(tripId)
-            if (response.isSuccessful) {
-                true to null
-            } else {
-                handleUnauthorized(response)
-                false to errorMessage(response)
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "deleteTrip failed: ${e.message}", e)
-            false to "Can't reach the server. Check your connection."
-        }
-    }
-}
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 data class TripHistoryUiState(
     val isLoading: Boolean = true,
-    val trips: List<TripEntry> = emptyList(),
-    val sessionIncidentCount: Int = 0,
-    val error: String? = null
+    val trips: List<TripEntry> = emptyList()
 )
 
-class TripHistoryViewModel : ViewModel() {
+/**
+ * Reads completed trips straight from Room, so history is available offline
+ * and updates the moment the sync worker, a new trip, or a delete lands.
+ */
+class TripHistoryViewModel(application: Application) : AndroidViewModel(application) {
+    private val repository = DriveRepository.getInstance(application)
+
     private val _state = MutableStateFlow(TripHistoryUiState())
     val state: StateFlow<TripHistoryUiState> = _state.asStateFlow()
 
-    private var refreshing = false
-    private var lastSessionStartedAt: Long? = null
-    private var generation = 0
+    private var observeJob: Job? = null
+    private var observingUserId: String? = null
 
-    fun refresh(sessionStartedAt: Long?) {
-        if (refreshing) return
-        refreshing = true
-        lastSessionStartedAt = sessionStartedAt
-        val requestGeneration = generation
+    fun refresh() {
+        val userId = AuthSession.user?.id?.takeIf { it.isNotBlank() }
+        if (userId == null) {
+            clear()
+            return
+        }
 
-        viewModelScope.launch {
-            try {
-                val (trips, tripsError) = TripApiClient.fetchTrips()
-                val (sessionCount, countError) = if (sessionStartedAt != null) {
-                    TripApiClient.fetchSessionDetectionCount(sessionStartedAt)
-                } else {
-                    0 to null
-                }
+        if (userId == observingUserId && observeJob?.isActive == true) {
+            repository.requestSync()
+            return
+        }
 
-                // Drop responses that arrive after sign-out cleared the state.
-                if (requestGeneration != generation) return@launch
-
-                _state.update { previous ->
-                    previous.copy(
-                        isLoading = false,
-                        trips = trips?.map { it.toTripEntry() } ?: previous.trips,
-                        sessionIncidentCount = sessionCount ?: previous.sessionIncidentCount,
-                        error = tripsError ?: countError
-                    )
-                }
-            } finally {
-                if (requestGeneration == generation) refreshing = false
+        observingUserId = userId
+        observeJob?.cancel()
+        _state.value = TripHistoryUiState(isLoading = true)
+        observeJob = viewModelScope.launch {
+            repository.observeHistory(userId).collect { rows ->
+                _state.value = TripHistoryUiState(
+                    isLoading = false,
+                    trips = rows.map { it.toTripEntry() }
+                )
             }
+        }
+        repository.requestSync()
+    }
+
+    fun deleteTrip(tripId: String) {
+        _state.update { state ->
+            state.copy(trips = state.trips.filterNot { it.id == tripId })
+        }
+        viewModelScope.launch {
+            runCatching { repository.deleteTrip(tripId) }
+                .onFailure { Log.w(TAG, "Couldn't delete trip $tripId", it) }
         }
     }
 
     fun clear() {
-        generation++
-        refreshing = false
-        lastSessionStartedAt = null
+        observeJob?.cancel()
+        observeJob = null
+        observingUserId = null
         _state.value = TripHistoryUiState()
     }
 
-    fun deleteTrip(tripId: String) {
-        viewModelScope.launch {
-            val (ok, error) = TripApiClient.deleteTrip(tripId)
-            if (ok) {
-                _state.update { it.copy(trips = it.trips.filterNot { trip -> trip.id == tripId }) }
-                refresh(lastSessionStartedAt)
-            } else {
-                _state.update { it.copy(error = error ?: "Couldn't delete the trip.") }
-            }
-        }
+    private companion object {
+        const val TAG = "TripHistoryViewModel"
     }
 }
 
-private fun TripDto.toTripEntry(): TripEntry = TripEntry(
-    id = id,
-    dateLabel = dateLabel.ifBlank { "Drive session" },
-    totalDuration = totalDuration.ifBlank { "Duration unavailable" },
-    incidents = incidents.orEmpty().map { Incident(it.description, it.time) }
+private fun TripWithIncidents.toTripEntry(): TripEntry = TripEntry(
+    id = trip.id,
+    dateLabel = SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.US)
+        .format(Date(trip.startTime)),
+    totalDuration = formatDurationText(trip.startTime, trip.endTime),
+    incidents = incidents
+        .sortedBy { it.deviceTimestamp }
+        .map { Incident(it.description, it.time) }
 )
+
+private fun formatDurationText(startTime: Long, endTime: Long?): String {
+    if (endTime == null || endTime <= startTime) return "Duration unavailable"
+    val totalMinutes = (endTime - startTime) / 60_000
+    if (totalMinutes < 1) return "Less than 1 min total driving"
+    val hours = totalMinutes / 60
+    val minutes = totalMinutes % 60
+    return when {
+        hours > 0 && minutes > 0 -> "$hours hr $minutes mins total driving"
+        hours > 0 -> "$hours hr total driving"
+        else -> "$minutes mins total driving"
+    }
+}
