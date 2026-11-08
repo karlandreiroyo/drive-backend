@@ -3,7 +3,7 @@ import bcrypt from 'bcrypt';
 import { supabase } from '../lib/supabase.js';
 import { createAndSendOtp, checkCode, isSmsConfigured, OtpPurpose } from './otpService.js';
 import { passwordError, resolveIdentifier, ResolvedIdentifier } from '../lib/validators.js';
-import { publicUser } from '../lib/jwt.js';
+import { publicUser, signResetToken, verifyResetToken } from '../lib/jwt.js';
 import { requireAuth, AuthenticatedRequest } from '../middleware/requireAuth.js';
 
 const router = Router();
@@ -85,6 +85,9 @@ router.post('/verify-otp', async (req, res) => {
         return res.json({
             success: true,
             message: purpose === 'signup' ? 'Email verified successfully!' : 'Code verified.',
+            // Proof of verification for the reset flow; the client sends this
+            // back to /reset-password instead of the identifier + code.
+            resetToken: purpose === 'reset' ? signResetToken(resolved.identifier) : undefined,
         });
     } catch (e) {
         console.error(e);
@@ -183,19 +186,42 @@ router.post('/forgot-password', async (req, res) => {
 
 router.post('/reset-password', async (req, res) => {
     try {
-        const resolved = resolveIdentifier(readIdentifier(req.body));
-        const code = String(req.body.code ?? '').trim();
         const newPassword = String(req.body.newPassword ?? '');
-
-        if (!resolved || !/^\d{6}$/.test(code)) {
-            return res.status(400).json({ success: false, message: 'Invalid request.' });
-        }
+        const resetToken = String(req.body.resetToken ?? '').trim();
+        const code = String(req.body.code ?? '').trim();
 
         const pwErr = passwordError(newPassword);
         if (pwErr) return res.status(400).json({ success: false, message: pwErr });
 
-        const result = await checkCode(resolved.identifier, code, 'reset', true);
-        if (!result.ok) return res.status(result.status).json({ success: false, message: result.message });
+        let resolved: ResolvedIdentifier | null = null;
+
+        if (resetToken) {
+            // Preferred path: the OTP was already verified and signed into a
+            // short-lived token, so no verification_codes lookup can fail here.
+            try {
+                resolved = resolveIdentifier(verifyResetToken(resetToken).identifier);
+            } catch {
+                return res.status(401).json({
+                    success: false,
+                    message: 'Your reset session has expired. Please verify a new code.',
+                });
+            }
+            if (!resolved) {
+                return res.status(400).json({ success: false, message: 'Invalid request.' });
+            }
+            console.log(`[reset-password] Using verified reset token (${resolved.kind}).`);
+        } else {
+            // Legacy path for older app builds that only send identifier + code.
+            resolved = resolveIdentifier(readIdentifier(req.body));
+            if (!resolved || !/^\d{6}$/.test(code)) {
+                return res.status(400).json({ success: false, message: 'Invalid request.' });
+            }
+
+            const result = await checkCode(resolved.identifier, code, 'reset', true);
+            if (!result.ok) {
+                return res.status(result.status).json({ success: false, message: result.message });
+            }
+        }
 
         const { user, error: lookupError } = await findUserByIdentifier(resolved);
         if (lookupError) {

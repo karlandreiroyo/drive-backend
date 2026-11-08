@@ -22,6 +22,33 @@ export function verifyAuthToken(token: string): AuthTokenPayload {
     return { sub: String(decoded.sub), email: decoded.email };
 }
 
+export type ResetTokenPayload = {
+    identifier: string;
+    purpose: 'reset';
+};
+
+// Short-lived proof that the OTP was verified, so /reset-password does not
+// have to re-read (and possibly miss) the verification_codes row.
+export function signResetToken(identifier: string): string {
+    return jwt.sign(
+        { identifier, purpose: 'reset' } satisfies ResetTokenPayload,
+        env.jwtSecret,
+        { expiresIn: '15m' }
+    );
+}
+
+export function verifyResetToken(token: string): ResetTokenPayload {
+    const decoded = jwt.verify(token, env.jwtSecret);
+    if (
+        typeof decoded === 'string' ||
+        typeof decoded.identifier !== 'string' ||
+        decoded.purpose !== 'reset'
+    ) {
+        throw new Error('Invalid reset token.');
+    }
+    return { identifier: decoded.identifier, purpose: 'reset' };
+}
+
 export function publicUser(user: Record<string, unknown>) {
     return {
         id: user.id != null ? String(user.id) : null,

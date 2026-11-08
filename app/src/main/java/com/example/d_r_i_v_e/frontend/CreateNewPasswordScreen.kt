@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -29,12 +30,17 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun CreateNewPasswordScreen(
     onBackClick: () -> Unit,
-    onUpdatePasswordClick: (newPassword: String, confirmPassword: String) -> Unit
+    onUpdatePasswordClick: (newPassword: String, confirmPassword: String) -> Unit,
+    isLoading: Boolean = false,
+    serverError: String? = null
 ) {
     var newPassword by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var newPasswordVisible by remember { mutableStateOf(false) }
     var confirmPasswordVisible by remember { mutableStateOf(false) }
+    var localError by remember { mutableStateOf<String?>(null) }
+
+    val errorMessage = localError ?: serverError
 
     Box(
         modifier = Modifier
@@ -89,7 +95,10 @@ fun CreateNewPasswordScreen(
             // New Password field
             OutlinedTextField(
                 value = newPassword,
-                onValueChange = { newPassword = it },
+                onValueChange = {
+                    newPassword = it
+                    localError = null
+                },
                 placeholder = { Text("New Password", color = Color.White.copy(alpha = 0.5f)) },
                 singleLine = true,
                 visualTransformation = if (newPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
@@ -120,7 +129,10 @@ fun CreateNewPasswordScreen(
             // Confirm New Password field
             OutlinedTextField(
                 value = confirmPassword,
-                onValueChange = { confirmPassword = it },
+                onValueChange = {
+                    confirmPassword = it
+                    localError = null
+                },
                 placeholder = { Text("Confirm New Password", color = Color.White.copy(alpha = 0.5f)) },
                 singleLine = true,
                 visualTransformation = if (confirmPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
@@ -146,24 +158,66 @@ fun CreateNewPasswordScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (errorMessage != null) {
+                Text(
+                    text = errorMessage,
+                    color = Color(0xFFFF6B6B),
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
+                )
+            }
+
             Spacer(modifier = Modifier.height(20.dp))
 
             // Update Password button
             Button(
-                onClick = { onUpdatePasswordClick(newPassword, confirmPassword) },
+                onClick = {
+                    val validationError = passwordValidationError(newPassword)
+                        ?: if (newPassword != confirmPassword) "Passwords do not match." else null
+                    if (validationError != null) {
+                        localError = validationError
+                    } else {
+                        localError = null
+                        onUpdatePasswordClick(newPassword, confirmPassword)
+                    }
+                },
+                enabled = !isLoading,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),
                 shape = RoundedCornerShape(28.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F0B94))
-            ) {
-                Text(
-                    text = "Update Password",
-                    color = Color.White,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF0F0B94),
+                    disabledContainerColor = Color(0xFF0F0B94).copy(alpha = 0.6f)
                 )
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        color = Color.White,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(20.dp)
+                    )
+                } else {
+                    Text(
+                        text = "Update Password",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
         }
     }
+}
+
+// Mirrors the backend's passwordError() rules so users get immediate feedback.
+private fun passwordValidationError(password: String): String? = when {
+    password.length < 8 -> "Password must be at least 8 characters."
+    !password.any { it.isLowerCase() } -> "Password needs at least 1 lowercase letter."
+    !password.any { it.isUpperCase() } -> "Password needs at least 1 uppercase letter."
+    !password.any { it.isDigit() } -> "Password needs at least 1 number."
+    !password.any { !it.isLetterOrDigit() } -> "Password needs at least 1 special character."
+    else -> null
 }

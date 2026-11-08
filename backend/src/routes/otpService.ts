@@ -227,7 +227,23 @@ export async function checkCode(
     console.error("Check OTP error:", error);
     return { ok: false, status: 500, message: "Server error. Please try again." };
   }
-  if (!row) return { ok: false, status: 400, message: "No active code. Please request a new one." };
+  if (!row) {
+    // Distinguish "already consumed" from "never issued" so the client shows
+    // an accurate message instead of a generic failure.
+    const { data: latest } = await supabase
+      .from("verification_codes")
+      .select("used, expires_at")
+      .eq("identifier", identifier)
+      .eq("verification_type", purpose)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (latest?.used) {
+      return { ok: false, status: 400, message: "This code has already been used. Please request a new one." };
+    }
+    return { ok: false, status: 400, message: "No active code. Please request a new one." };
+  }
   if (new Date(row.expires_at).getTime() < Date.now())
     return { ok: false, status: 400, message: "This code has expired. Please request a new one." };
 

@@ -23,6 +23,7 @@ fun AppNavigation() {
     val otpState by otpViewModel.state.collectAsState()
     var otpIdentifier by remember { mutableStateOf("") }
     var otpCode by remember { mutableStateOf("") }
+    var otpResetToken by remember { mutableStateOf<String?>(null) }
     var otpPurpose by remember { mutableStateOf("signup") }
     var awaitingResetCode by remember { mutableStateOf(false) }
     var welcomeName by remember { mutableStateOf<String?>(null) }
@@ -193,6 +194,8 @@ fun AppNavigation() {
                 onSendCodeClick = { identifier ->
                     otpIdentifier = identifier
                     otpPurpose = "reset"
+                    otpResetToken = null
+                    otpCode = ""
                     awaitingResetCode = true
                     otpViewModel.forgotPassword(otpIdentifier)
                 },
@@ -206,7 +209,9 @@ fun AppNavigation() {
 
         "otp" -> {
             LaunchedEffect(otpState) {
-                if (otpState is OtpUiState.Verified) {
+                val verified = otpState as? OtpUiState.Verified
+                if (verified != null) {
+                    otpResetToken = verified.resetToken
                     otpViewModel.reset()
                     if (otpPurpose == "signup") {
                         Toast.makeText(context, "Email verified! You can now log in.", Toast.LENGTH_LONG).show()
@@ -233,28 +238,27 @@ fun AppNavigation() {
         }
 
         "createPassword" -> {
-            LaunchedEffect(otpState) {
-                when (val s = otpState) {
-                    is OtpUiState.PasswordReset -> {
-                        Toast.makeText(context, s.message, Toast.LENGTH_LONG).show()
-                        otpViewModel.reset()
-                        navigateTo("login")
-                    }
-                    is OtpUiState.Error -> {
-                        Toast.makeText(context, s.message, Toast.LENGTH_LONG).show()
-                        otpViewModel.reset()
-                    }
-                    else -> {}
+            val resetState = otpState
+            LaunchedEffect(resetState) {
+                if (resetState is OtpUiState.PasswordReset) {
+                    Toast.makeText(context, resetState.message, Toast.LENGTH_LONG).show()
+                    otpViewModel.reset()
+                    otpCode = ""
+                    otpResetToken = null
+                    navigateTo("login")
                 }
             }
             CreateNewPasswordScreen(
+                isLoading = resetState is OtpUiState.Loading,
+                serverError = (resetState as? OtpUiState.Error)?.message,
                 onBackClick = { goBack() },
-                onUpdatePasswordClick = { newPassword, confirmPassword ->
-                    if (newPassword != confirmPassword) {
-                        Toast.makeText(context, "Passwords do not match.", Toast.LENGTH_SHORT).show()
-                    } else {
-                        otpViewModel.resetPassword(otpIdentifier, otpCode, newPassword)
-                    }
+                onUpdatePasswordClick = { newPassword, _ ->
+                    otpViewModel.resetPassword(
+                        identifier = otpIdentifier,
+                        code = otpCode,
+                        newPassword = newPassword,
+                        resetToken = otpResetToken
+                    )
                 }
             )
         }
