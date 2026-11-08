@@ -24,9 +24,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.d_r_i_v_e.Incident
 import com.example.d_r_i_v_e.TripEntry
 import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
 import com.example.d_r_i_v_e.backend.routes.TripHistoryViewModel
@@ -368,6 +370,7 @@ private fun TripCard(
                     .padding(vertical = 4.dp)
             ) {
                 trip.incidents.forEach { incident ->
+                    val display = incident.toDisplay()
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -377,21 +380,40 @@ private fun TripCard(
                         Icon(
                             imageVector = Icons.Filled.Warning,
                             contentDescription = null,
-                            tint = Color(0xFFFFC107),
+                            tint = display.severityColor,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = incident.description,
-                            color = Color.White.copy(alpha = 0.85f),
-                            fontSize = 13.sp,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Text(
-                            text = incident.time,
-                            color = Color.White.copy(alpha = 0.5f),
-                            fontSize = 12.sp
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = display.title,
+                                    color = Color.White.copy(alpha = 0.9f),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (incident.time.isNotBlank()) {
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = incident.time,
+                                        color = Color.White.copy(alpha = 0.5f),
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
+                            display.severityLabel?.let { label ->
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = label,
+                                    color = display.severityColor,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -407,5 +429,87 @@ private fun formatElapsed(totalSeconds: Long): String {
         String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
     } else {
         String.format(Locale.US, "%02d:%02d", minutes, seconds)
+    }
+}
+
+private data class IncidentDisplay(
+    val title: String,
+    val severityLabel: String?,
+    val severityColor: Color
+)
+
+private val percentPattern = Regex("""(\d{1,3})\s*%""")
+private val decimalPattern = Regex("""(?<![\d.])(0\.\d+|1\.0+)(?![\d.])""")
+
+// Stored incidents look like "Motion · 41% confidence" (older rows) or
+// "Motion|0.41" (structured), so pull the type and confidence back out.
+private fun Incident.toDisplay(): IncidentDisplay {
+    val percent = parseConfidence(description)
+    val severity = when {
+        percent == null -> null
+        percent >= 75 -> "High"
+        percent >= 45 -> "Moderate"
+        else -> "Low"
+    }
+    val severityColor = when (severity) {
+        "High" -> Color(0xFFFF5C5C)
+        "Moderate" -> Color(0xFFFFC107)
+        "Low" -> Color(0xFF4CD964)
+        else -> Color.White.copy(alpha = 0.5f)
+    }
+
+    return IncidentDisplay(
+        title = friendlyIncidentName(detectionTypeOf(description)),
+        severityLabel = if (severity != null && percent != null) {
+            "Severity: $severity ($percent%)"
+        } else {
+            null
+        },
+        severityColor = severityColor
+    )
+}
+
+private fun parseConfidence(description: String): Int? {
+    percentPattern.find(description)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let {
+        return it.coerceIn(0, 100)
+    }
+    decimalPattern.find(description)?.groupValues?.getOrNull(1)?.toDoubleOrNull()?.let {
+        return (it * 100).toInt().coerceIn(0, 100)
+    }
+    return null
+}
+
+private fun detectionTypeOf(description: String): String {
+    val head = description
+        .substringBefore("|")
+        .substringBefore("·")
+        .substringBefore(" - ")
+    val cleaned = head
+        .replace(percentPattern, "")
+        .replace(Regex("(?i)confidence"), "")
+        .trim()
+        .trim('-', ':', ' ')
+    return cleaned.ifBlank { description.trim().ifBlank { "Safety Alert" } }
+}
+
+private fun friendlyIncidentName(rawType: String): String {
+    val normalized = rawType.lowercase(Locale.US)
+    return when {
+        normalized.isBlank() -> "Safety Alert"
+        normalized.contains("microsleep") ||
+            normalized.contains("eye") ||
+            normalized.contains("blink") -> "Microsleep Detected"
+        normalized.contains("drows") ||
+            normalized.contains("sleep") ||
+            normalized.contains("fatigue") ||
+            normalized.contains("yawn") -> "Drowsiness Alert"
+        normalized.contains("nod") ||
+            normalized.contains("head") ||
+            normalized.contains("distract") ||
+            normalized.contains("gaze") ||
+            normalized.contains("phone") ||
+            normalized.contains("motion") ||
+            normalized.contains("movement") -> "Head Nod / Distraction"
+        else -> rawType.trim().ifBlank { "Safety Alert" }
     }
 }
