@@ -204,8 +204,16 @@ router.post('/reset-password', async (req, res) => {
         const resetToken = String(req.body.resetToken ?? '').trim();
         const code = String(req.body.code ?? '').trim();
 
+        console.log(
+            `[reset-password] payload: identifier="${readIdentifier(req.body)}", ` +
+            `codeLength=${code.length}, hasResetToken=${Boolean(resetToken)}, ` +
+            `passwordLength=${newPassword.length}`
+        );
+
         const pwErr = passwordError(newPassword);
-        if (pwErr) return res.status(400).json({ success: false, message: pwErr });
+        if (pwErr) {
+            return res.status(400).json({ success: false, code: 'WEAK_PASSWORD', message: pwErr });
+        }
 
         let resolved: ResolvedIdentifier | null = null;
 
@@ -215,25 +223,43 @@ router.post('/reset-password', async (req, res) => {
             try {
                 resolved = resolveIdentifier(verifyResetToken(resetToken).identifier);
             } catch {
+                console.warn('[reset-password] Reset token is invalid or expired.');
                 return res.status(401).json({
                     success: false,
+                    code: 'RESET_TOKEN_EXPIRED',
                     message: 'Your reset session has expired. Please verify a new code.',
                 });
             }
             if (!resolved) {
-                return res.status(400).json({ success: false, message: 'Invalid request.' });
+                return res.status(400).json({
+                    success: false,
+                    code: 'INVALID_IDENTIFIER',
+                    message: 'The verified email or phone number is not valid.',
+                });
             }
             console.log(`[reset-password] Using verified reset token (${resolved.kind}).`);
         } else {
             // Legacy path for older app builds that only send identifier + code.
             resolved = resolveIdentifier(readIdentifier(req.body));
             if (!resolved || !/^\d{6}$/.test(code)) {
-                return res.status(400).json({ success: false, message: 'Invalid request.' });
+                console.warn(
+                    `[reset-password] Missing reset credentials: ` +
+                    `identifier="${readIdentifier(req.body)}", codeLength=${code.length}.`
+                );
+                return res.status(400).json({
+                    success: false,
+                    code: 'MISSING_RESET_CREDENTIALS',
+                    message: 'Your verification expired. Please request a new code.',
+                });
             }
 
             const result = await checkCode(resolved.identifier, code, 'reset', true);
             if (!result.ok) {
-                return res.status(result.status).json({ success: false, message: result.message });
+                return res.status(result.status).json({
+                    success: false,
+                    code: 'CODE_REJECTED',
+                    message: result.message,
+                });
             }
         }
 
@@ -244,13 +270,18 @@ router.post('/reset-password', async (req, res) => {
 
         const { user, error: lookupError } = await findUserByIdentifier(resolved);
         if (lookupError) {
-            console.error('Reset password lookup error:', lookupError);
-            return res.status(500).json({ success: false, message: 'Server error. Please try again.' });
+            console.error('[reset-password] User lookup failed:', lookupError);
+            return res.status(500).json({
+                success: false,
+                code: 'USER_LOOKUP_FAILED',
+                message: 'Could not read the account. Please try again.',
+            });
         }
         if (!user) {
             console.warn(`[reset-password] No user row matches ${resolved.kind} "${resolved.identifier}".`);
             return res.status(404).json({
                 success: false,
+                code: 'ACCOUNT_NOT_FOUND',
                 message: 'No account found for that email or phone number.',
             });
         }
@@ -265,8 +296,12 @@ router.post('/reset-password', async (req, res) => {
             .select('id');
 
         if (error) {
-            console.error('Reset password error:', error);
-            return res.status(500).json({ success: false, message: 'Server error. Please try again.' });
+            console.error(`[reset-password] Update failed for user ${user.id}:`, error);
+            return res.status(500).json({
+                success: false,
+                code: 'DB_UPDATE_ERROR',
+                message: 'Could not update the password. Please try again.',
+            });
         }
         if (!data || data.length === 0) {
             // `select('id')` after an update can come back empty when the
@@ -293,7 +328,10 @@ router.post('/reset-password', async (req, res) => {
             );
             return res.status(500).json({
                 success: false,
-                message: 'We could not save your new password. Please try again.',
+                code: 'DB_WRITE_BLOCKED',
+                message:
+                    'The server cannot save password changes right now. ' +
+                    'Please contact support if this keeps happening.',
             });
         }
 
