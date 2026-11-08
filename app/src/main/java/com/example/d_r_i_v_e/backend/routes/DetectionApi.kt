@@ -22,6 +22,9 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.POST
 import java.io.IOException
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 data class DetectionPayload(
@@ -94,6 +97,12 @@ class DetectionViewModel : ViewModel() {
     private val _sessionDetectionCount = MutableStateFlow(0)
     val sessionDetectionCount: StateFlow<Int> = _sessionDetectionCount.asStateFlow()
 
+    private val _sessionIncidents = MutableStateFlow<List<DetectionEvent>>(emptyList())
+    val sessionIncidents: StateFlow<List<DetectionEvent>> = _sessionIncidents.asStateFlow()
+
+    private val _sessionStartedAt = MutableStateFlow<Long?>(null)
+    val sessionStartedAt: StateFlow<Long?> = _sessionStartedAt.asStateFlow()
+
     private val _lastEvent = MutableStateFlow<DetectionEvent?>(null)
     val lastEvent: StateFlow<DetectionEvent?> = _lastEvent.asStateFlow()
 
@@ -102,6 +111,56 @@ class DetectionViewModel : ViewModel() {
 
     private val _uploadError = MutableStateFlow<String?>(null)
     val uploadError: StateFlow<String?> = _uploadError.asStateFlow()
+
+    fun startSession() {
+        _sessionStartedAt.value = System.currentTimeMillis()
+        _sessionDetectionCount.value = 0
+        _sessionIncidents.value = emptyList()
+        _lastEvent.value = null
+        _uploadStatus.value = UploadStatus.Idle
+        _uploadError.value = null
+    }
+
+    fun finishSession(onResult: (String) -> Unit = {}) {
+        val startedAt = _sessionStartedAt.value
+        val incidents = _sessionIncidents.value
+        val finishedAt = System.currentTimeMillis()
+
+        _sessionStartedAt.value = null
+        _sessionDetectionCount.value = 0
+        _sessionIncidents.value = emptyList()
+        _lastEvent.value = null
+        _uploadStatus.value = UploadStatus.Idle
+        _uploadError.value = null
+
+        if (startedAt == null) {
+            onResult("No active driving session.")
+            return
+        }
+
+        viewModelScope.launch {
+            val request = CreateTripRequest(
+                dateLabel = SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.US)
+                    .format(Date(startedAt)),
+                totalDuration = formatDurationText(finishedAt - startedAt),
+                incidents = incidents.map { event ->
+                    TripIncidentPayload(
+                        description = "${event.label} · ${(event.confidence * 100).toInt()}% confidence",
+                        time = SimpleDateFormat("h:mm a", Locale.US).format(Date(event.timestamp))
+                    )
+                }
+            )
+
+            val (saved, error) = TripApiClient.saveTrip(request)
+            if (saved) {
+                onResult("Trip saved to history.")
+            } else {
+                val message = error ?: "Couldn't save this trip to history."
+                _uploadError.value = message
+                onResult(message)
+            }
+        }
+    }
 
     fun onDetection(result: DetectionResult) {
         _sessionDetectionCount.update { it + 1 }
@@ -112,6 +171,7 @@ class DetectionViewModel : ViewModel() {
             timestamp = System.currentTimeMillis()
         )
         _lastEvent.value = event
+        _sessionIncidents.update { (it + event).takeLast(500) }
 
         val userId = AuthSession.user?.id?.toLongOrNull()
         if (userId == null) {
@@ -135,9 +195,23 @@ class DetectionViewModel : ViewModel() {
     }
 
     fun resetSession() {
+        _sessionStartedAt.value = null
         _sessionDetectionCount.value = 0
+        _sessionIncidents.value = emptyList()
         _lastEvent.value = null
         _uploadStatus.value = UploadStatus.Idle
         _uploadError.value = null
+    }
+}
+
+private fun formatDurationText(durationMs: Long): String {
+    val totalMinutes = durationMs / 60_000
+    if (totalMinutes < 1) return "Less than 1 min total driving"
+    val hours = totalMinutes / 60
+    val minutes = totalMinutes % 60
+    return when {
+        hours > 0 && minutes > 0 -> "$hours hr $minutes mins total driving"
+        hours > 0 -> "$hours hr total driving"
+        else -> "$minutes mins total driving"
     }
 }

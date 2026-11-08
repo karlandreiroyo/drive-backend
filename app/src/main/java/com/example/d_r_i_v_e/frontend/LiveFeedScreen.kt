@@ -19,7 +19,12 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -39,6 +44,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -80,6 +86,7 @@ fun LiveFeedScreen(
     var showAlert by remember { mutableStateOf(false) }
     var alertEvent by remember { mutableStateOf<DetectionEvent?>(null) }
 
+    val alertPlayer = rememberDetectionAlertPlayer()
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
     var hasCameraPermission by remember {
@@ -97,7 +104,10 @@ fun LiveFeedScreen(
     ) { granted ->
         hasCameraPermission = granted
         permissionDenied = !granted
-        if (granted) isDrivingActive = true
+        if (granted) {
+            detectionViewModel.startSession()
+            isDrivingActive = true
+        }
     }
 
     LaunchedEffect(lastEvent) {
@@ -124,7 +134,7 @@ fun LiveFeedScreen(
     val onFrameDetection: (DetectionResult) -> Unit = { result ->
         mainHandler.post {
             vibrateAlert(context)
-            Toast.makeText(context, "${result.label} detected", Toast.LENGTH_SHORT).show()
+            alertPlayer.play()
         }
         detectionViewModel.onDetection(result)
     }
@@ -241,17 +251,6 @@ fun LiveFeedScreen(
                         )
                     }
 
-                    // Detection alert banner
-                    AnimatedVisibility(visible = showAlert) {
-                        alertEvent?.let { event ->
-                            Spacer(modifier = Modifier.height(10.dp))
-                            DetectionAlertBanner(
-                                event = event,
-                                uploadStatus = uploadStatus
-                            )
-                        }
-                    }
-
                     // Sync summary
                     if (isDrivingActive && detectionCount > 0) {
                         Spacer(modifier = Modifier.height(10.dp))
@@ -314,9 +313,12 @@ fun LiveFeedScreen(
                             if (isDrivingActive) {
                                 isDrivingActive = false
                                 showAlert = false
-                                detectionViewModel.resetSession()
+                                detectionViewModel.finishSession { message ->
+                                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                }
                             } else if (hasCameraPermission) {
                                 permissionDenied = false
+                                detectionViewModel.startSession()
                                 isDrivingActive = true
                             } else {
                                 permissionLauncher.launch(Manifest.permission.CAMERA)
@@ -370,6 +372,24 @@ fun LiveFeedScreen(
                 onTabSettingsClick = onTabSettingsClick
             )
         }
+
+        // Heads-up alert floats above the feed, anchored to the top edge.
+        AnimatedVisibility(
+            visible = showAlert,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
+        ) {
+            alertEvent?.let { event ->
+                DetectionAlertBanner(
+                    event = event,
+                    uploadStatus = uploadStatus
+                )
+            }
+        }
     }
 }
 
@@ -381,28 +401,38 @@ private fun DetectionAlertBanner(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color(0x33FF4C4C))
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .shadow(14.dp, RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0xFF2B1212))
+            .border(1.dp, Color(0x66FF4C4C), RoundedCornerShape(18.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            imageVector = Icons.Filled.Warning,
-            contentDescription = null,
-            tint = Color(0xFFFF6B6B),
-            modifier = Modifier.size(22.dp)
-        )
-        Spacer(modifier = Modifier.width(10.dp))
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(Color(0x33FF4C4C)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Warning,
+                contentDescription = null,
+                tint = Color(0xFFFF6B6B),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = "${event.label} detected",
                 color = Color(0xFFFF8A8A),
-                fontSize = 13.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = "${(event.confidence * 100).toInt()}% confidence",
-                color = Color.White.copy(alpha = 0.6f),
+                text = "Driver alert · ${(event.confidence * 100).toInt()}% confidence",
+                color = Color.White.copy(alpha = 0.65f),
                 fontSize = 11.sp
             )
         }

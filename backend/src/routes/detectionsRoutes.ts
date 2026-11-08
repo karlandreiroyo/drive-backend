@@ -1,9 +1,57 @@
 import { Router, Request, Response } from 'express';
 import { supabase } from '../lib/supabase.js';
+import { requireAuth, AuthenticatedRequest } from '../middleware/requireAuth.js';
 
 const router: Router = Router();
 
 const DETECTION_TYPE_MAX_LENGTH = 64;
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 200;
+
+router.get('/detections', requireAuth, async (req: AuthenticatedRequest, res: Response): Promise<Response> => {
+    try {
+        const userId = Number(req.auth?.userId);
+        if (!Number.isSafeInteger(userId)) {
+            return res.status(401).json({ success: false, message: 'Authentication required.' });
+        }
+
+        const sinceRaw = Number(req.query.since);
+        const limitRaw = Number(req.query.limit);
+        const limit = Number.isSafeInteger(limitRaw)
+            ? Math.min(Math.max(limitRaw, 1), MAX_LIMIT)
+            : DEFAULT_LIMIT;
+
+        let query = supabase
+            .from('detections')
+            .select('id,detection_type,confidence,device_timestamp,created_at')
+            .eq('user_id', userId);
+
+        if (Number.isSafeInteger(sinceRaw) && sinceRaw > 0) {
+            query = query.gte('device_timestamp', sinceRaw);
+        }
+
+        const { data, error } = await query
+            .order('device_timestamp', { ascending: false })
+            .limit(limit);
+
+        if (error) {
+            console.error('Detections fetch error:', error);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to load detections. Please try again.',
+            });
+        }
+
+        return res.json({
+            success: true,
+            count: data?.length ?? 0,
+            detections: data ?? [],
+        });
+    } catch (err: unknown) {
+        console.error('Detections fetch exception:', err);
+        return res.status(500).json({ success: false, message: 'Server error. Please try again.' });
+    }
+});
 
 router.post('/detections', async (req: Request, res: Response): Promise<Response> => {
     try {

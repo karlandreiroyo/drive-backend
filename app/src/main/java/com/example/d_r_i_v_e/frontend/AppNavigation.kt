@@ -5,8 +5,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.d_r_i_v_e.TripEntry
-import com.example.d_r_i_v_e.Incident
 import com.example.d_r_i_v_e.backend.AuthSession
 import com.example.d_r_i_v_e.backend.AuthViewModel
 import com.example.d_r_i_v_e.backend.OtpViewModel
@@ -79,26 +77,6 @@ fun AppNavigation() {
         else showAccountChooser = true
     }
     // ===================================================
-
-    var trips by remember {
-        mutableStateOf(
-            listOf(
-                TripEntry(
-                    id = "1",
-                    dateLabel = "Today, 7:45 AM",
-                    totalDuration = "45 mins total driving",
-                    incidents = listOf(
-                        Incident("Micro-sleep Detected", "9:12 AM")
-                    )
-                ),
-                TripEntry(
-                    id = "2",
-                    dateLabel = "Yesterday, 6:07 PM",
-                    totalDuration = "1 hr 15 mins total driving"
-                )
-            )
-        )
-    }
 
     var archiveEntries by remember {
         mutableStateOf(
@@ -288,10 +266,6 @@ fun AppNavigation() {
         )
 
         "tripHistory" -> TripHistoryScreen(
-            trips = trips,
-            onDeleteTrip = { targetId ->
-                trips = trips.filter { it.id != targetId }
-            },
             onTabDashboardClick = { navigateTo("dashboard") },
             onTabCameraClick = { navigateTo("liveFeed") },
             onTabMapClick = { navigateTo("tripHistory") },

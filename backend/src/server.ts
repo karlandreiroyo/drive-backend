@@ -8,6 +8,7 @@ import signupRouter from './routes/signupBackend.js';
 import otpRouter from './routes/otpRoutes.js';
 import reportsRouter from './routes/reportsRoutes.js';
 import detectionsRouter from './routes/detectionsRoutes.js';
+import tripsRouter from './routes/tripsRoutes.js';
 
 const app: Application = express();
 
@@ -30,11 +31,11 @@ const authLimiter = rateLimit({
     message: { success: false, message: 'Too many requests. Please try again later.' },
 });
 
-// Detections can arrive several times per driving session, so they get a
-// larger budget than the auth/report limiter.
+// Detections arrive during a driving session and Trip History polls for new
+// rows while it is open, so this budget is larger than the auth limiter.
 const detectionLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 600,
+    max: 1200,
     standardHeaders: true,
     legacyHeaders: false,
     message: { success: false, message: 'Too many requests. Please try again later.' },
@@ -61,6 +62,7 @@ app.use('/api/auth', authLimiter, signupRouter);
 app.use('/api/auth', authLimiter, otpRouter);
 app.use('/api', authLimiter, reportsRouter);
 app.use('/api', detectionLimiter, detectionsRouter);
+app.use('/api', detectionLimiter, tripsRouter);
 
 app.use((_req: Request, res: Response) => {
     res.status(404).json({
