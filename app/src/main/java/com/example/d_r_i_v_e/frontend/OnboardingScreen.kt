@@ -81,23 +81,28 @@ fun OnboardingScreen(
             .fillMaxSize()
             .background(Color.Black)
     ) {
+        Column(modifier = Modifier.fillMaxSize()) {
 
-        HorizontalPager(
-            state = pagerState,
-            // Swiping stays available at any time; the carousel also advances itself.
-            userScrollEnabled = true,
-            beyondViewportPageCount = 1,
-            contentPadding = PaddingValues(horizontal = 32.dp, vertical = 10.dp),
-            pageSpacing = 10.dp,
-            modifier = Modifier.fillMaxSize()
-        ) { page ->
-            OnboardingPage(
-                item = onboardingItems[page],
-                isLastPage = onboardingItems[page].isLastPage,
-                currentPage = pagerState.currentPage,
+            // Only the slides move; pagination and actions stay fixed below.
+            HorizontalPager(
+                state = pagerState,
+                userScrollEnabled = true,
+                beyondViewportPageCount = 1,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) { page ->
+                OnboardingSlide(
+                    item = onboardingItems[page],
+                    pagerState = pagerState,
+                    page = page
+                )
+            }
+
+            OnboardingFooter(
                 totalPages = onboardingItems.size,
-                pagerState = pagerState,
-                page = page,
+                currentPage = pagerState.currentPage,
+                isLastPage = pagerState.currentPage == onboardingItems.lastIndex,
                 onFinishClick = onFinished,
                 onLoginClick = onLoginClick
             )
@@ -151,15 +156,10 @@ fun OnboardingScreen(
 }
 
 @Composable
-fun OnboardingPage(
+private fun OnboardingSlide(
     item: OnboardingItem,
-    isLastPage: Boolean,
-    currentPage: Int,
-    totalPages: Int,
     pagerState: PagerState,
-    page: Int,
-    onFinishClick: () -> Unit,
-    onLoginClick: () -> Unit
+    page: Int
 ) {
     // Signed page offset: 0 when settled on this page, -1 when this page is
     // one full screen to the right, +1 when it is one screen to the left.
@@ -173,14 +173,6 @@ fun OnboardingPage(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .graphicsLayer {
-                // Neighbouring cards sit slightly back and dimmed, like a deck.
-                val cardScale = 1f - absOffset * 0.08f
-                scaleX = cardScale
-                scaleY = cardScale
-                alpha = 1f - absOffset * 0.28f
-            }
-            .clip(RoundedCornerShape(28.dp))
             .background(item.backgroundColor)
     ) {
         Image(
@@ -190,10 +182,10 @@ fun OnboardingPage(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    // Artwork trails the finger, so the text appears to slide
-                    // over it at a faster, layered speed.
+                    // The photo drifts at a slightly different speed than the
+                    // page itself, keeping the slide feeling layered.
                     translationX = -pageOffset * size.width * 0.10f
-                    val scale = 1.24f - absOffset * 0.04f
+                    val scale = 1.2f - absOffset * 0.03f
                     scaleX = scale
                     scaleY = scale
                     alpha = 1f - absOffset * 0.15f
@@ -218,8 +210,7 @@ fun OnboardingPage(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.navigationBars)
-                .padding(bottom = 24.dp, start = 32.dp, end = 32.dp)
+                .padding(bottom = 28.dp, start = 32.dp, end = 32.dp)
                 .graphicsLayer {
                     alpha = 1f - absOffset * 0.35f
                     translationX = pageOffset * size.width * 0.18f
@@ -252,24 +243,43 @@ fun OnboardingPage(
                     alpha = 1f - absOffset * 0.4f
                 }
             )
+        }
+    }
+}
 
-            Spacer(modifier = Modifier.height(24.dp))
+@Composable
+private fun OnboardingFooter(
+    totalPages: Int,
+    currentPage: Int,
+    isLastPage: Boolean,
+    onFinishClick: () -> Unit,
+    onLoginClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(WindowInsets.navigationBars)
+            .padding(start = 32.dp, end = 32.dp, top = 16.dp, bottom = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        DotsIndicator(
+            totalDots = totalPages,
+            selectedIndex = currentPage
+        )
 
-            DotsIndicator(
-                totalDots = totalPages,
-                selectedIndex = currentPage
-            )
+        Spacer(modifier = Modifier.height(20.dp))
 
-            Spacer(modifier = Modifier.height(24.dp))
-
+        // The 52dp slot is reserved on every page so slides never resize.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
+            contentAlignment = Alignment.Center
+        ) {
             if (isLastPage) {
-                // The last page has nowhere to swipe to, so it keeps the CTA
-                // that completes onboarding.
                 Button(
                     onClick = onFinishClick,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp),
+                    modifier = Modifier.fillMaxSize(),
                     shape = RoundedCornerShape(28.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F0B94))
                 ) {
@@ -280,8 +290,23 @@ fun OnboardingPage(
                         fontWeight = FontWeight.SemiBold
                     )
                 }
+            } else {
+                Text(
+                    text = "Swipe to browse",
+                    color = Color.White.copy(alpha = 0.5f),
+                    fontSize = 13.sp
+                )
+            }
+        }
 
-                Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Reserve the login-link height on every page for a stable layout.
+        Box(
+            modifier = Modifier.height(30.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isLastPage) {
                 Text(
                     text = "I already have an account",
                     color = Color.White.copy(alpha = 0.9f),
@@ -290,12 +315,6 @@ fun OnboardingPage(
                         .clip(RoundedCornerShape(4.dp))
                         .clickable { onLoginClick() }
                         .padding(6.dp)
-                )
-            } else {
-                Text(
-                    text = "Swipe to continue",
-                    color = Color.White.copy(alpha = 0.65f),
-                    fontSize = 13.sp
                 )
             }
         }
