@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import { supabase } from './supabaseclient.js';
 import { createAndSendOtp } from './otpService.js';
+import { signAuthToken } from '../lib/jwt.js';
 
 const router: Router = Router();
 
@@ -174,7 +175,9 @@ router.post('/login', async (req: Request, res: Response): Promise<Response> => 
             return res.status(200).json({
                 success: true,
                 message: 'Login successful',
+                token: signAuthToken('0', normalizedEmail),
                 user: {
+                    id: '0',
                     fullName: 'Test Driver',
                     email: normalizedEmail,
                     phoneNumber: '09123456789',
@@ -211,12 +214,17 @@ router.post('/login', async (req: Request, res: Response): Promise<Response> => 
         return res.status(200).json({
             success: true,
             message: 'Login successful',
+            token: signAuthToken(user.id, user.email),
             user: {
+                id: String(user.id),
                 fullName: user.full_name,
                 email: user.email,
                 phoneNumber: user.phone_number,
                 vehicleType: user.vehicle_type,
-                plateNumber: user.plate_number
+                plateNumber: user.plate_number,
+                emergencyName: user.emergency_name,
+                emergencyPhone: user.emergency_phone,
+                isVerified: Boolean(user.is_verified)
             }
         });
 

@@ -138,52 +138,84 @@ object TripApiClient {
         }
     }
 
-    suspend fun fetchTrips(): Pair<List<TripDto>?, String?> = try {
-        val response = service.getTrips()
-        if (response.isSuccessful) {
-            response.body()?.trips.orEmpty() to null
-        } else {
-            null to errorMessage(response)
+    private fun handleUnauthorized(response: Response<*>): Boolean {
+        if (response.code() == 401) {
+            AuthSession.notifySessionExpired()
+            return true
         }
-    } catch (e: Exception) {
-        Log.w(TAG, "fetchTrips failed: ${e.message}", e)
-        null to "Can't reach the server. Check your connection."
+        return false
     }
 
-    suspend fun fetchSessionDetectionCount(since: Long): Pair<Int?, String?> = try {
-        val response = service.getDetections(since = since, limit = 200)
-        if (response.isSuccessful) {
-            response.body()?.count to null
-        } else {
-            null to errorMessage(response)
+    private fun hasSession(): Boolean {
+        if (AuthSession.token.isNullOrBlank()) {
+            AuthSession.notifySessionExpired()
+            return false
         }
-    } catch (e: Exception) {
-        Log.w(TAG, "fetchSessionDetectionCount failed: ${e.message}", e)
-        null to "Can't reach the server. Check your connection."
+        return true
     }
 
-    suspend fun saveTrip(request: CreateTripRequest): Pair<Boolean, String?> = try {
-        val response = service.saveTrip(request)
-        if (response.isSuccessful) {
-            true to response.body()?.message
-        } else {
-            false to errorMessage(response)
+    suspend fun fetchTrips(): Pair<List<TripDto>?, String?> {
+        if (!hasSession()) return null to "Please log in to view your trips."
+        return try {
+            val response = service.getTrips()
+            if (response.isSuccessful) {
+                response.body()?.trips.orEmpty() to null
+            } else {
+                handleUnauthorized(response)
+                null to errorMessage(response)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchTrips failed: ${e.message}", e)
+            null to "Can't reach the server. Check your connection."
         }
-    } catch (e: Exception) {
-        Log.w(TAG, "saveTrip failed: ${e.message}", e)
-        false to "Can't reach the server. Check your connection."
     }
 
-    suspend fun deleteTrip(tripId: String): Pair<Boolean, String?> = try {
-        val response = service.deleteTrip(tripId)
-        if (response.isSuccessful) {
-            true to null
-        } else {
-            false to errorMessage(response)
+    suspend fun fetchSessionDetectionCount(since: Long): Pair<Int?, String?> {
+        if (!hasSession()) return null to "Please log in to view your trips."
+        return try {
+            val response = service.getDetections(since = since, limit = 200)
+            if (response.isSuccessful) {
+                response.body()?.count to null
+            } else {
+                handleUnauthorized(response)
+                null to errorMessage(response)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchSessionDetectionCount failed: ${e.message}", e)
+            null to "Can't reach the server. Check your connection."
         }
-    } catch (e: Exception) {
-        Log.w(TAG, "deleteTrip failed: ${e.message}", e)
-        false to "Can't reach the server. Check your connection."
+    }
+
+    suspend fun saveTrip(request: CreateTripRequest): Pair<Boolean, String?> {
+        if (!hasSession()) return false to "Please log in to save this trip."
+        return try {
+            val response = service.saveTrip(request)
+            if (response.isSuccessful) {
+                true to response.body()?.message
+            } else {
+                handleUnauthorized(response)
+                false to errorMessage(response)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "saveTrip failed: ${e.message}", e)
+            false to "Can't reach the server. Check your connection."
+        }
+    }
+
+    suspend fun deleteTrip(tripId: String): Pair<Boolean, String?> {
+        if (!hasSession()) return false to "Please log in to manage your trips."
+        return try {
+            val response = service.deleteTrip(tripId)
+            if (response.isSuccessful) {
+                true to null
+            } else {
+                handleUnauthorized(response)
+                false to errorMessage(response)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "deleteTrip failed: ${e.message}", e)
+            false to "Can't reach the server. Check your connection."
+        }
     }
 }
 

@@ -14,9 +14,6 @@ import com.example.d_r_i_v_e.backend.routes.ReportViewModel
 @Composable
 fun AppNavigation() {
     val context = LocalContext.current
-    LaunchedEffect(Unit) {
-        AuthSession.restore(context)
-    }
     val otpViewModel: OtpViewModel = viewModel()
     val otpState by otpViewModel.state.collectAsState()
     var otpIdentifier by remember { mutableStateOf("") }
@@ -45,6 +42,20 @@ fun AppNavigation() {
 
     BackHandler(enabled = screenHistory.size > 1) {
         goBack()
+    }
+
+    // Restore the saved session before choosing the first screen, then react to
+    // any 401 from a protected endpoint by returning to login.
+    LaunchedEffect(Unit) {
+        AuthSession.restore(context)
+        if (!AuthSession.token.isNullOrBlank()) {
+            screenHistory = listOf("dashboard")
+        }
+        AuthSession.expiredEvents.collect {
+            AuthSession.clear(context)
+            screenHistory = listOf("auth")
+            Toast.makeText(context, "Session expired. Please log in again.", Toast.LENGTH_LONG).show()
+        }
     }
 
     // Only leave Forgot Password once the code request actually succeeds.

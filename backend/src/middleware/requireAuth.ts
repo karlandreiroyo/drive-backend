@@ -10,7 +10,7 @@ export function requireAuth(req: AuthenticatedRequest, res: Response, next: Next
     const token = header?.startsWith('Bearer ') ? header.slice(7) : null;
 
     if (!token) {
-        res.status(401).json({ success: false, message: 'Authentication required.' });
+        res.status(401).json({ success: false, code: 'TOKEN_MISSING', message: 'Authentication required.' });
         return;
     }
 
@@ -18,7 +18,14 @@ export function requireAuth(req: AuthenticatedRequest, res: Response, next: Next
         const payload = verifyAuthToken(token);
         req.auth = { userId: payload.sub, email: payload.email };
         next();
-    } catch {
-        res.status(401).json({ success: false, message: 'Session expired. Please log in again.' });
+    } catch (err: unknown) {
+        // Log only the verification reason, never the token itself.
+        const reason = err instanceof Error ? err.message : 'unknown error';
+        console.warn(`[auth] Rejected bearer token: ${reason}`);
+        res.status(401).json({
+            success: false,
+            code: 'SESSION_EXPIRED',
+            message: 'Session expired. Please log in again.',
+        });
     }
 }
