@@ -26,10 +26,8 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PhotoCamera
@@ -149,18 +147,17 @@ fun LiveFeedScreen(
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.systemBars)
         ) {
-            // Scrollable Content Container
+            // Content fills the space above the anchored bottom navigation.
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 // Main Container Card
                 Column(
                     modifier = Modifier
-                        .fillMaxWidth()
+                        .fillMaxSize()
                         .clip(RoundedCornerShape(20.dp))
                         .background(Color(0xFF141414))
                         .padding(16.dp)
@@ -188,11 +185,11 @@ fun LiveFeedScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Camera Display Container
+                    // Camera preview takes all remaining vertical space
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(280.dp)
+                            .weight(1f)
                             .clip(RoundedCornerShape(16.dp))
                             .background(Color(0xFF4A4A4C)),
                         contentAlignment = Alignment.Center

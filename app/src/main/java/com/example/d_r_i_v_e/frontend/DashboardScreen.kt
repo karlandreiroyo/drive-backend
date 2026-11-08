@@ -7,24 +7,17 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Insights
-import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -85,19 +78,18 @@ fun DashboardScreen(
                 .windowInsetsPadding(WindowInsets.systemBars)
         ) {
 
-            // Scrollable content
+            // Content fills the space above the anchored bottom navigation.
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
 
                 // Main card container
                 Column(
                     modifier = Modifier
-                        .fillMaxWidth()
+                        .fillMaxSize()
                         .clip(RoundedCornerShape(20.dp))
                         .background(Color(0xFF141414))
                         .padding(20.dp)
@@ -147,14 +139,16 @@ fun DashboardScreen(
 
                     Spacer(modifier = Modifier.height(20.dp))
 
-                    // Profile / readings card
+                    // Profile / readings card flexes to fill the remaining height
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .weight(1f)
                             .clip(RoundedCornerShape(16.dp))
                             .background(Color(0xFF4A4A4C))
-                            .padding(vertical = 32.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                            .padding(vertical = 16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
                     ) {
 
                         Box(
@@ -291,47 +285,14 @@ fun DashboardScreen(
                 }
             }
 
-            // Bottom navigation bar
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .windowInsetsPadding(WindowInsets.navigationBars)
-                    .padding(horizontal = 20.dp, vertical = 12.dp)
-                    .clip(RoundedCornerShape(28.dp))
-                    .background(Color(0xFF141414))
-                    .padding(vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-
-                // Dashboard / Insights
-                BottomNavIcon(
-                    icon = Icons.Filled.Insights,
-                    isSelected = true,
-                    onClick = onTabDashboardClick
-                )
-
-                // Camera / Live Feed (Ikinabit sa onTabCameraClick)
-                BottomNavIcon(
-                    icon = Icons.Filled.CameraAlt,
-                    isSelected = false,
-                    onClick = onTabCameraClick
-                )
-
-                // Map
-                BottomNavIcon(
-                    icon = Icons.Filled.Map,
-                    isSelected = false,
-                    onClick = onTabMapClick
-                )
-
-                // Settings
-                BottomNavIcon(
-                    icon = Icons.Filled.Settings,
-                    isSelected = false,
-                    onClick = onTabSettingsClick
-                )
-            }
+            // Bottom navigation bar (anchored below the content area)
+            SharedBottomNav(
+                selectedTab = "dashboard",
+                onTabDashboardClick = onTabDashboardClick,
+                onTabCameraClick = onTabCameraClick,
+                onTabMapClick = onTabMapClick,
+                onTabSettingsClick = onTabSettingsClick
+            )
         }
 
         // Welcome notification shown after a successful login
@@ -440,38 +401,6 @@ private fun InfoCard(
             color = Color.White,
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold
-        )
-    }
-}
-
-@Composable
-private fun BottomNavIcon(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .size(44.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(
-                if (isSelected) {
-                    Color(0xFF0F0B94)
-                } else {
-                    Color.Transparent
-                }
-            )
-            .clickable {
-                onClick()
-            },
-        contentAlignment = Alignment.Center
-    ) {
-
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = Color.White,
-            modifier = Modifier.size(22.dp)
         )
     }
 }
