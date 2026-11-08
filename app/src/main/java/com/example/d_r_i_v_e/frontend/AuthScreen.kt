@@ -2,7 +2,6 @@ package com.example.d_r_i_v_e.frontend
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -46,12 +45,7 @@ fun AuthScreen(
                 modifier = Modifier
                     .size(180.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFF0E1B2C))
-                    .border(
-                        width = 1.dp,
-                        color = Color.White.copy(alpha = 0.12f),
-                        shape = CircleShape
-                    ),
+                    .background(Color.White),
                 contentAlignment = Alignment.Center
             ) {
                 Image(
