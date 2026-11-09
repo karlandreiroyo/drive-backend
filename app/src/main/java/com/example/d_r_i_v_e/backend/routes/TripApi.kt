@@ -92,7 +92,14 @@ private fun TripWithIncidents.toTripEntry(): TripEntry = TripEntry(
     totalDuration = formatDurationText(trip.startTime, trip.endTime),
     incidents = incidents
         .sortedBy { it.deviceTimestamp }
-        .map { Incident(it.description, it.time) }
+        .map {
+            Incident(
+                description = it.description,
+                time = it.time,
+                type = it.incidentType,
+                confidence = it.confidence
+            )
+        }
 )
 
 private fun formatDurationText(startTime: Long, endTime: Long?): String {

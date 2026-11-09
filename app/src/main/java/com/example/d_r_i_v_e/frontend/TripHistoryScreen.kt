@@ -399,12 +399,12 @@ private data class IncidentDisplay(
 )
 
 private val percentPattern = Regex("""(\d{1,3})\s*%""")
-private val decimalPattern = Regex("""(?<![\d.])(0\.\d+|1\.0+)(?![\d.])""")
 
-// Stored incidents look like "Motion · 41% confidence" (older rows) or
-// "Motion|0.41" (structured), so pull the type and confidence back out.
+// Room stores the type and confidence in their own columns, so no string
+// parsing is needed; the description stays a human-readable summary only.
 private fun Incident.toDisplay(): IncidentDisplay {
-    val percent = parseConfidence(description)
+    val percent = confidence?.let { (it.coerceIn(0f, 1f) * 100).toInt() }
+        ?: parseConfidence(description)
     val severity = when {
         percent == null -> null
         percent >= 75 -> "High"
@@ -419,7 +419,7 @@ private fun Incident.toDisplay(): IncidentDisplay {
     }
 
     return IncidentDisplay(
-        title = friendlyIncidentName(detectionTypeOf(description)),
+        title = friendlyIncidentName(type.ifBlank { description }),
         severityLabel = if (severity != null && percent != null) {
             "Severity: $severity ($percent%)"
         } else {
@@ -433,23 +433,7 @@ private fun parseConfidence(description: String): Int? {
     percentPattern.find(description)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let {
         return it.coerceIn(0, 100)
     }
-    decimalPattern.find(description)?.groupValues?.getOrNull(1)?.toDoubleOrNull()?.let {
-        return (it * 100).toInt().coerceIn(0, 100)
-    }
     return null
-}
-
-private fun detectionTypeOf(description: String): String {
-    val head = description
-        .substringBefore("|")
-        .substringBefore("·")
-        .substringBefore(" - ")
-    val cleaned = head
-        .replace(percentPattern, "")
-        .replace(Regex("(?i)confidence"), "")
-        .trim()
-        .trim('-', ':', ' ')
-    return cleaned.ifBlank { description.trim().ifBlank { "Safety Alert" } }
 }
 
 private fun friendlyIncidentName(rawType: String): String {
