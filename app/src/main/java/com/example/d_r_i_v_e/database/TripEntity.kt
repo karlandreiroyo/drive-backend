@@ -5,12 +5,7 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
-/**
- * Local mirror of `public.trips`. Times are stored as epoch millis locally and
- * converted to ISO-8601 UTC when the sync worker uploads them.
- *
- * [isSynced] and [isDeleted] are device-only bookkeeping and never uploaded.
- */
+/** Local cache/outbox for `public.trips`; epoch millis are uploaded as UTC ISO-8601. */
 @Entity(
     tableName = "trips",
     indices = [

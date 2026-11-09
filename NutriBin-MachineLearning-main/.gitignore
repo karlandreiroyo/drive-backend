@@ -1,0 +1,16 @@
+tflite/data
+tflite/outputs
+tflite/saved_model
+
+yolo/data
+yolo/outputs
+yolo/saved_model
+yolo/scripts/runs
+yolo/scripts/yolov8n.pt
+
+yolov8n.pt
+
+yolo/scripts/__pycache__/
+
+yolo/scripts/bio
+yolo/scripts/trash-clasiffier-biodegradable

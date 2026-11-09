@@ -44,21 +44,25 @@ class TripHistoryViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
 
-        if (userId == observingUserId && observeJob?.isActive == true) {
-            repository.requestSync()
-            return
+        if (userId != observingUserId || observeJob?.isActive != true) {
+            observingUserId = userId
+            observeJob?.cancel()
+            _state.value = TripHistoryUiState(isLoading = true)
+            observeJob = viewModelScope.launch {
+                repository.observeHistory(userId).collect { rows ->
+                    _state.value = TripHistoryUiState(
+                        isLoading = false,
+                        trips = rows.map { it.toTripEntry() }
+                    )
+                }
+            }
         }
 
-        observingUserId = userId
-        observeJob?.cancel()
-        _state.value = TripHistoryUiState(isLoading = true)
-        observeJob = viewModelScope.launch {
-            repository.observeHistory(userId).collect { rows ->
-                _state.value = TripHistoryUiState(
-                    isLoading = false,
-                    trips = rows.map { it.toTripEntry() }
-                )
-            }
+        // Pull the user's remote history into Room (no-op offline), then drain
+        // any local outbox. The Room observer above emits the merged result.
+        viewModelScope.launch {
+            runCatching { repository.refreshHistoryFromRemote() }
+                .onFailure { Log.w(TAG, "Couldn't refresh remote history", it) }
         }
         repository.requestSync()
     }

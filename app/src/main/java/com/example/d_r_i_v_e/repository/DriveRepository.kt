@@ -2,32 +2,36 @@ package com.example.d_r_i_v_e.repository
 
 import android.content.Context
 import com.example.d_r_i_v_e.backend.AuthSession
+import com.example.d_r_i_v_e.backend.routes.HistoryOutcome
+import com.example.d_r_i_v_e.backend.routes.RemoteIncidentDto
+import com.example.d_r_i_v_e.backend.routes.RemoteTripDto
 import com.example.d_r_i_v_e.backend.routes.SyncApiClient
 import com.example.d_r_i_v_e.backend.routes.SyncIncidentDto
 import com.example.d_r_i_v_e.backend.routes.SyncOutcome
 import com.example.d_r_i_v_e.backend.routes.SyncRequestDto
+import com.example.d_r_i_v_e.backend.routes.SyncResponseDto
 import com.example.d_r_i_v_e.backend.routes.SyncTripDto
 import com.example.d_r_i_v_e.database.DriveDatabase
 import com.example.d_r_i_v_e.database.TripEntity
 import com.example.d_r_i_v_e.database.TripIncidentEntity
 import com.example.d_r_i_v_e.database.TripWithIncidents
+import com.example.d_r_i_v_e.sync.NetworkMonitor
 import com.example.d_r_i_v_e.sync.SyncScheduler
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import java.util.UUID
 
-/**
- * Single source of truth for drive data. Every write lands in Room first and
- * schedules a network-constrained sync; nothing in the detection or alert path
- * waits on the network.
- */
+/** Remote-first driving writes; Room keeps the history cache and offline outbox. */
 class DriveRepository private constructor(context: Context) {
     private val appContext = context.applicationContext
     private val tripDao = DriveDatabase.getInstance(appContext).tripDao()
     private val incidentDao = DriveDatabase.getInstance(appContext).tripIncidentDao()
+    private val writeMutex = Mutex()
 
     fun observeHistory(userId: String): Flow<List<TripWithIncidents>> =
         tripDao.observeHistory(userId)
@@ -35,7 +39,7 @@ class DriveRepository private constructor(context: Context) {
     suspend fun startTrip(
         userId: String,
         startedAt: Long = System.currentTimeMillis()
-    ): TripEntity {
+    ): TripEntity = writeMutex.withLock {
         val trip = TripEntity(
             id = UUID.randomUUID().toString(),
             userId = userId,
@@ -45,8 +49,23 @@ class DriveRepository private constructor(context: Context) {
             origin = "Current location",
             destination = "Destination"
         )
-        tripDao.upsert(trip)
-        return trip
+
+        when (val outcome = upload(tripRequest(trip))) {
+            is SyncOutcome.Success -> {
+                requireAck(outcome.response.tripsSynced, trip.id, "trip")
+                val syncedTrip = trip.copy(isSynced = true)
+                tripDao.upsert(syncedTrip)
+                syncedTrip
+            }
+
+            is SyncOutcome.ConnectionFailed -> {
+                tripDao.upsert(trip)
+                SyncScheduler.enqueue(appContext)
+                trip
+            }
+
+            else -> throw writeFailure(outcome)
+        }
     }
 
     suspend fun recordIncident(
@@ -54,7 +73,7 @@ class DriveRepository private constructor(context: Context) {
         label: String,
         confidence: Float,
         deviceTimestamp: Long = System.currentTimeMillis()
-    ): TripIncidentEntity {
+    ): TripIncidentEntity = writeMutex.withLock {
         val boundedConfidence = confidence.coerceIn(0f, 1f)
         val incident = TripIncidentEntity(
             id = UUID.randomUUID().toString(),
@@ -65,97 +84,274 @@ class DriveRepository private constructor(context: Context) {
             incidentType = label,
             confidence = boundedConfidence,
             deviceTimestamp = deviceTimestamp,
-            isSynced = false,
-            emailSent = false,
             createdAt = deviceTimestamp
         )
-        incidentDao.upsert(incident)
-        SyncScheduler.enqueue(appContext)
-        return incident
+        val currentTrip = tripDao.findById(trip.id) ?: trip
+        if (currentTrip.isDeleted) throw SyncWriteException("Cannot add an incident to a deleted trip.")
+        val parentNeedsSync = !currentTrip.isSynced
+
+        val request = SyncRequestDto(
+            trips = if (parentNeedsSync) listOf(currentTrip.toSyncDto()) else emptyList(),
+            incidents = listOf(incident.toSyncDto()),
+            deleteTripIds = emptyList()
+        )
+
+        when (val outcome = upload(request)) {
+            is SyncOutcome.Success -> {
+                val response = outcome.response
+                requireAck(response.incidentsSynced, incident.id, "incident")
+                if (parentNeedsSync) requireAck(response.tripsSynced, currentTrip.id, "trip")
+                cacheSyncedTrip(currentTrip)
+                val syncedIncident = incident.copy(
+                    isSynced = true,
+                    emailSent = incident.id in response.emailSentIds
+                )
+                incidentDao.upsert(syncedIncident)
+                syncedIncident
+            }
+
+            is SyncOutcome.ConnectionFailed -> {
+                ensureLocalParent(currentTrip)
+                incidentDao.upsert(incident)
+                SyncScheduler.enqueue(appContext)
+                incident
+            }
+
+            else -> throw writeFailure(outcome)
+        }
     }
 
     suspend fun finishTrip(
         tripId: String,
         finishedAt: Long = System.currentTimeMillis()
-    ): Boolean {
-        val trip = tripDao.findById(tripId) ?: return false
-        if (trip.status == TripEntity.STATUS_IN_PROGRESS) {
-            tripDao.finish(
-                tripId = tripId,
-                endTime = finishedAt,
-                status = TripEntity.STATUS_COMPLETED,
-                destination = trip.destination.ifBlank { "Destination" }
-            )
-            // The in-progress row may already be on Supabase; push the final
-            // end_time/status on the next sync.
-            tripDao.markUnsynced(tripId)
+    ): Boolean = writeMutex.withLock {
+        val trip = tripDao.findById(tripId) ?: return@withLock false
+        if (trip.status != TripEntity.STATUS_IN_PROGRESS) return@withLock true
+
+        val destination = trip.destination.ifBlank { "Destination" }
+        val completedTrip = trip.copy(
+            endTime = finishedAt,
+            status = TripEntity.STATUS_COMPLETED,
+            destination = destination
+        )
+
+        when (val outcome = upload(tripRequest(completedTrip))) {
+            is SyncOutcome.Success -> {
+                requireAck(outcome.response.tripsSynced, tripId, "trip")
+                tripDao.finish(
+                    tripId = tripId,
+                    endTime = finishedAt,
+                    status = TripEntity.STATUS_COMPLETED,
+                    destination = destination,
+                    isSynced = true
+                )
+                true
+            }
+
+            is SyncOutcome.ConnectionFailed -> {
+                tripDao.finish(
+                    tripId = tripId,
+                    endTime = finishedAt,
+                    status = TripEntity.STATUS_COMPLETED,
+                    destination = destination,
+                    isSynced = false
+                )
+                SyncScheduler.enqueue(appContext)
+                true
+            }
+
+            else -> throw writeFailure(outcome)
         }
-        SyncScheduler.enqueue(appContext)
-        return true
     }
 
-    /** Closes a session that was left open when the process was killed. */
+    /**
+     * Local-only close for logout/session-expiry, where the token may already be
+     * gone. Marks the trip completed and unsynced so the worker uploads it on the
+     * next authenticated sync; never touches the network or requires auth.
+     */
+    suspend fun closeTripOffline(
+        tripId: String,
+        finishedAt: Long = System.currentTimeMillis()
+    ) = writeMutex.withLock {
+        val trip = tripDao.findById(tripId) ?: return@withLock
+        if (trip.status != TripEntity.STATUS_IN_PROGRESS) return@withLock
+        tripDao.finish(
+            tripId = tripId,
+            endTime = maxOf(finishedAt, trip.startTime),
+            status = TripEntity.STATUS_COMPLETED,
+            destination = trip.destination.ifBlank { "Destination" },
+            isSynced = false
+        )
+        SyncScheduler.enqueue(appContext)
+    }
+
+    /** Crash recovery marks the local session dirty so the constrained worker reconciles it. */
     suspend fun closeOrphanedTrips() {
         val orphan = tripDao.latestActiveTrip() ?: return
-        tripDao.finish(
-            tripId = orphan.id,
-            endTime = maxOf(System.currentTimeMillis(), orphan.startTime),
-            status = TripEntity.STATUS_COMPLETED,
-            destination = orphan.destination.ifBlank { "Destination" }
-        )
-        tripDao.markUnsynced(orphan.id)
-        SyncScheduler.enqueue(appContext)
+        writeMutex.withLock {
+            val current = tripDao.findById(orphan.id) ?: return@withLock
+            if (current.status == TripEntity.STATUS_IN_PROGRESS) {
+                tripDao.finish(
+                    tripId = current.id,
+                    endTime = maxOf(System.currentTimeMillis(), current.startTime),
+                    status = TripEntity.STATUS_COMPLETED,
+                    destination = current.destination.ifBlank { "Destination" },
+                    isSynced = false
+                )
+                SyncScheduler.enqueue(appContext)
+            }
+        }
     }
 
-    suspend fun deleteTrip(tripId: String) {
-        val trip = tripDao.findById(tripId) ?: return
-        if (trip.isSynced) {
-            // Keep the row as a tombstone until the server confirms the delete.
-            tripDao.markDeleted(tripId)
-            SyncScheduler.enqueue(appContext)
-        } else {
-            tripDao.delete(tripId)
-        }
+    suspend fun deleteTrip(tripId: String) = writeMutex.withLock {
+        if (tripDao.findById(tripId) == null) return@withLock
+        tripDao.markDeleted(tripId)
+        SyncScheduler.enqueue(appContext)
     }
 
     fun requestSync() = SyncScheduler.enqueue(appContext)
 
-    suspend fun syncPending(): SyncOutcome {
-        val userId = AuthSession.user?.id
-        if (userId.isNullOrBlank()) return SyncOutcome.Unauthorized
+    /**
+     * Pulls the user's remote history into the local cache on login/startup.
+     * The network call runs outside [writeMutex] so a slow fetch never blocks the
+     * live detection write path; only the merge is serialized against writes.
+     */
+    suspend fun refreshHistoryFromRemote(): HistoryOutcome {
+        val userId = AuthSession.user?.id?.takeIf { it.isNotBlank() }
+        if (userId == null || AuthSession.token.isNullOrBlank()) {
+            return HistoryOutcome.Unauthorized
+        }
+        if (!NetworkMonitor.isOnline(appContext)) {
+            return HistoryOutcome.ConnectionFailed("Device is offline.")
+        }
 
-        val trips = tripDao.unsyncedTrips(userId)
-        val incidents = incidentDao.unsyncedIncidents(userId)
-        val deletes = tripDao.pendingDeletes(userId)
-
-        // Sent even when everything is already synced: the backend uses this
-        // call to retry emergency emails that Brevo could not deliver earlier.
-        val request = SyncRequestDto(
-            trips = trips.map { it.toSyncDto() },
-            incidents = incidents.map { it.toSyncDto() },
-            deleteTripIds = deletes.map { it.id }
-        )
-
-        val outcome = SyncApiClient.sync(request)
-        if (outcome is SyncOutcome.Success) {
-            val response = outcome.response
-            if (response.tripsSynced.isNotEmpty()) {
-                tripDao.markSynced(response.tripsSynced)
-            }
-            if (response.incidentsSynced.isNotEmpty()) {
-                incidentDao.markSynced(response.incidentsSynced)
-            }
-            if (response.emailSentIds.isNotEmpty()) {
-                incidentDao.markEmailSent(response.emailSentIds)
-            }
-            if (response.deletedTripIds.isNotEmpty()) {
-                tripDao.deleteByIds(response.deletedTripIds)
-            }
+        val outcome = SyncApiClient.history()
+        if (outcome is HistoryOutcome.Success) {
+            writeMutex.withLock { mergeRemoteHistory(userId, outcome.response.trips) }
         }
         return outcome
     }
 
+    suspend fun syncPending(): SyncOutcome = writeMutex.withLock {
+        val userId = AuthSession.user?.id
+        if (userId.isNullOrBlank()) return@withLock SyncOutcome.Unauthorized
+        if (!NetworkMonitor.isOnline(appContext)) {
+            return@withLock SyncOutcome.ConnectionFailed("Device is offline.")
+        }
+
+        lateinit var lastOutcome: SyncOutcome
+        var fullBatch: Boolean
+        do {
+            val trips = tripDao.unsyncedTrips(userId).take(MAX_TRIPS)
+            val incidents = incidentDao.unsyncedIncidents(userId).take(MAX_INCIDENTS)
+            val deletes = tripDao.pendingDeletes(userId).take(MAX_DELETES)
+            val outcome = SyncApiClient.sync(
+                SyncRequestDto(
+                    trips = trips.map { it.toSyncDto() },
+                    incidents = incidents.map { it.toSyncDto() },
+                    deleteTripIds = deletes.map { it.id }
+                )
+            )
+            if (outcome !is SyncOutcome.Success) return@withLock outcome
+
+            val response = outcome.response
+            applySyncResponse(response)
+            lastOutcome = outcome
+            fullBatch = trips.size == MAX_TRIPS || incidents.size == MAX_INCIDENTS ||
+                deletes.size == MAX_DELETES
+            if (!fullBatch) return@withLock outcome
+
+            val syncedTrips = response.tripsSynced.toSet()
+            val syncedIncidents = response.incidentsSynced.toSet()
+            val deletedTrips = response.deletedTripIds.toSet()
+            val progressed = trips.any { it.id in syncedTrips } ||
+                incidents.any { it.id in syncedIncidents } ||
+                deletes.any { it.id in deletedTrips }
+            if (!progressed) {
+                return@withLock SyncOutcome.Failed("The server did not acknowledge any queued rows.")
+            }
+        } while (fullBatch)
+        return@withLock lastOutcome
+    }
+
+    private suspend fun upload(request: SyncRequestDto): SyncOutcome {
+        if (!NetworkMonitor.isOnline(appContext)) {
+            return SyncOutcome.ConnectionFailed("Device is offline.")
+        }
+        if (AuthSession.token.isNullOrBlank() || AuthSession.user?.id.isNullOrBlank()) {
+            return SyncOutcome.Unauthorized
+        }
+        return SyncApiClient.sync(request)
+    }
+
+    private suspend fun applySyncResponse(response: SyncResponseDto) {
+        if (response.tripsSynced.isNotEmpty()) tripDao.markSynced(response.tripsSynced)
+        if (response.incidentsSynced.isNotEmpty()) incidentDao.markSynced(response.incidentsSynced)
+        if (response.emailSentIds.isNotEmpty()) incidentDao.markEmailSent(response.emailSentIds)
+        if (response.deletedTripIds.isNotEmpty()) tripDao.deleteByIds(response.deletedTripIds)
+    }
+
+    /**
+     * Upserts remote rows as synced without ever deleting local data or
+     * overwriting a row that still has pending uploads or a pending delete.
+     * Runs under [writeMutex]; scoped strictly to the authenticated [userId].
+     */
+    private suspend fun mergeRemoteHistory(userId: String, remoteTrips: List<RemoteTripDto>) {
+        if (remoteTrips.isEmpty()) return
+        val pendingTripIds = tripDao.locallyPendingTripIds(userId).toSet()
+        val deletedTripIds = tripDao.pendingDeletes(userId).map { it.id }.toSet()
+        val pendingIncidentIds = incidentDao.unsyncedIncidentIds(userId).toSet()
+
+        for (remoteTrip in remoteTrips) {
+            val trip = remoteTrip.toEntity()
+            if (trip.userId != userId || trip.id.isBlank()) continue
+            if (trip.id !in pendingTripIds) tripDao.upsert(trip)
+
+            for (remoteIncident in remoteTrip.incidents) {
+                val incident = remoteIncident.toEntity()
+                if (incident.userId != userId || incident.id.isBlank()) continue
+                if (incident.tripId != trip.id || incident.tripId in deletedTripIds) continue
+                if (incident.id in pendingIncidentIds) continue
+                incidentDao.upsert(incident)
+            }
+        }
+    }
+
+    private suspend fun ensureLocalParent(trip: TripEntity) {
+        if (tripDao.findById(trip.id) == null) tripDao.upsert(trip)
+    }
+
+    private suspend fun cacheSyncedTrip(trip: TripEntity) {
+        if (tripDao.findById(trip.id) == null) {
+            tripDao.upsert(trip.copy(isSynced = true))
+        } else {
+            tripDao.markSynced(listOf(trip.id))
+        }
+    }
+
+    private fun tripRequest(trip: TripEntity): SyncRequestDto = SyncRequestDto(
+        trips = listOf(trip.toSyncDto()),
+        incidents = emptyList(),
+        deleteTripIds = emptyList()
+    )
+
+    private fun requireAck(ids: List<String>, id: String, label: String) {
+        if (id !in ids) throw SyncWriteException("The server did not confirm the $label.")
+    }
+
+    private fun writeFailure(outcome: SyncOutcome): SyncWriteException = when (outcome) {
+        SyncOutcome.Unauthorized -> SyncWriteException("Log in again to save driving data.")
+        is SyncOutcome.ConnectionFailed -> SyncWriteException(outcome.message)
+        is SyncOutcome.Retryable -> SyncWriteException(outcome.message)
+        is SyncOutcome.Failed -> SyncWriteException(outcome.message)
+        is SyncOutcome.Success -> SyncWriteException("The server did not confirm the write.")
+    }
+
     companion object {
+        private const val MAX_TRIPS = 100
+        private const val MAX_INCIDENTS = 300
+        private const val MAX_DELETES = 100
+
         @Volatile
         private var instance: DriveRepository? = null
 
@@ -165,6 +361,8 @@ class DriveRepository private constructor(context: Context) {
             }
     }
 }
+
+class SyncWriteException(message: String) : Exception(message)
 
 private fun TripEntity.toSyncDto(): SyncTripDto = SyncTripDto(
     id = id,
@@ -194,3 +392,72 @@ private fun Long.toUtcIso(): String =
     SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
         .apply { timeZone = TimeZone.getTimeZone("UTC") }
         .format(Date(this))
+
+private fun RemoteTripDto.toEntity(): TripEntity {
+    val startMillis = startTime.toEpochMillis(System.currentTimeMillis())
+    return TripEntity(
+        id = id,
+        userId = userId,
+        startTime = startMillis,
+        endTime = endTime.toEpochMillisOrNull(),
+        status = status?.takeIf { it.isNotBlank() } ?: TripEntity.STATUS_COMPLETED,
+        origin = origin ?: "",
+        destination = destination ?: "",
+        createdAt = createdAt.toEpochMillis(startMillis),
+        isSynced = true,
+        isDeleted = false
+    )
+}
+
+private fun RemoteIncidentDto.toEntity(): TripIncidentEntity {
+    val deviceMillis = if (deviceTimestamp > 0) deviceTimestamp
+    else createdAt.toEpochMillis(System.currentTimeMillis())
+    return TripIncidentEntity(
+        id = id,
+        tripId = tripId,
+        userId = userId,
+        description = description?.takeIf { it.isNotBlank() } ?: "Detection",
+        time = time ?: "",
+        incidentType = incidentType?.takeIf { it.isNotBlank() } ?: "Detection",
+        confidence = confidence.toFloat().coerceIn(0f, 1f),
+        deviceTimestamp = deviceMillis,
+        isSynced = true,
+        emailSent = emailSent,
+        createdAt = createdAt.toEpochMillis(deviceMillis)
+    )
+}
+
+private fun String?.toEpochMillisOrNull(): Long? {
+    if (this.isNullOrBlank()) return null
+    return parseIsoMillis(this)
+}
+
+private fun String?.toEpochMillis(fallback: Long): Long {
+    if (this.isNullOrBlank()) return fallback
+    return parseIsoMillis(this) ?: fallback
+}
+
+/**
+ * PostgREST emits timestamptz as ISO-8601 with a +00:00 offset (or Z) and a
+ * variable-length fraction. java.time needs API 26, so normalize the fraction to
+ * three digits and the offset to ±HHMM, then parse with SimpleDateFormat.
+ */
+private fun parseIsoMillis(value: String): Long? {
+    val normalized = value.trim()
+        .replace(Regex("\\.(\\d+)")) { "." + it.groupValues[1].take(3).padEnd(3, '0') }
+        .replace("Z", "+0000")
+        .replace(Regex("([+-]\\d{2}):(\\d{2})$"), "$1$2")
+    val patterns = listOf(
+        "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
+        "yyyy-MM-dd'T'HH:mm:ssZ"
+    )
+    for (pattern in patterns) {
+        val parsed = runCatching {
+            SimpleDateFormat(pattern, Locale.US)
+                .apply { timeZone = TimeZone.getTimeZone("UTC"); isLenient = false }
+                .parse(normalized)
+        }.getOrNull()
+        if (parsed != null) return parsed.time
+    }
+    return null
+}

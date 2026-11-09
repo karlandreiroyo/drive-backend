@@ -1,26 +1,26 @@
 package com.example.d_r_i_v_e.database
 
 import androidx.room.Dao
-import androidx.room.Insert
-import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface TripDao {
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     suspend fun upsert(trip: TripEntity)
 
     @Query(
-        "UPDATE trips SET end_time = :endTime, status = :status, destination = :destination " +
-            "WHERE id = :tripId"
+        "UPDATE trips SET end_time = :endTime, status = :status, destination = :destination, " +
+            "is_synced = :isSynced WHERE id = :tripId"
     )
     suspend fun finish(
         tripId: String,
         endTime: Long,
         status: String,
-        destination: String
+        destination: String,
+        isSynced: Boolean
     )
 
     @Query("SELECT * FROM trips WHERE status = 'IN_PROGRESS' ORDER BY start_time DESC LIMIT 1")
@@ -35,20 +35,17 @@ interface TripDao {
     )
     suspend fun unsyncedTrips(userId: String): List<TripEntity>
 
-    @Query("SELECT * FROM trips WHERE user_id = :userId AND is_synced = 1 AND is_deleted = 1")
+    @Query("SELECT * FROM trips WHERE user_id = :userId AND is_deleted = 1")
     suspend fun pendingDeletes(userId: String): List<TripEntity>
+
+    @Query("SELECT id FROM trips WHERE user_id = :userId AND (is_synced = 0 OR is_deleted = 1)")
+    suspend fun locallyPendingTripIds(userId: String): List<String>
 
     @Query("UPDATE trips SET is_synced = 1 WHERE id IN (:tripIds)")
     suspend fun markSynced(tripIds: List<String>)
 
-    @Query("UPDATE trips SET is_synced = 0 WHERE id = :tripId")
-    suspend fun markUnsynced(tripId: String)
-
     @Query("UPDATE trips SET is_deleted = 1 WHERE id = :tripId")
     suspend fun markDeleted(tripId: String)
-
-    @Query("DELETE FROM trips WHERE id = :tripId")
-    suspend fun delete(tripId: String)
 
     @Query("DELETE FROM trips WHERE id IN (:tripIds)")
     suspend fun deleteByIds(tripIds: List<String>)

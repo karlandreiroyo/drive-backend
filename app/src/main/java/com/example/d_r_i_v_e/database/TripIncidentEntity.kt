@@ -6,11 +6,7 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
-/**
- * Local mirror of `public.trip_incidents`. New rows are written with
- * `is_synced = false` and `email_sent = false`; the sync worker flips both
- * once Supabase accepts the row and Brevo confirms the emergency email.
- */
+/** Local cache/outbox for `public.trip_incidents`; pending rows sync when connected. */
 @Entity(
     tableName = "trip_incidents",
     foreignKeys = [

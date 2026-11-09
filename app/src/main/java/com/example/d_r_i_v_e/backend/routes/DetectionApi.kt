@@ -9,6 +9,7 @@ import com.example.d_r_i_v_e.database.TripEntity
 import com.example.d_r_i_v_e.ml.DetectionResult
 import com.example.d_r_i_v_e.ml.DriverMonitorFrame
 import com.example.d_r_i_v_e.repository.DriveRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,16 +22,10 @@ data class DetectionEvent(
     val timestamp: Long
 )
 
-/**
- * State of the on-device write. Detection never waits for the network; the
- * sync worker uploads [LocalLogStatus.SavedOffline] rows later.
- */
-enum class LocalLogStatus { Idle, Saving, SavedOffline, Failed }
+/** State of the repository write: online acknowledgement or offline queue. */
+enum class LocalLogStatus { Idle, Saving, SavedOnline, SavedOffline, Failed }
 
-/**
- * Owns the driving session: opens a local trip, appends incidents to Room, and
- * closes the trip. Internet access lives entirely in [com.example.d_r_i_v_e.sync.TripSyncWorker].
- */
+/** Owns the driving session while the repository routes writes online or offline. */
 class DetectionViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = DriveRepository.getInstance(application)
 
@@ -86,11 +81,13 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
             try {
                 activeTrip = repository.startTrip(userId, startedAt)
                 onReady()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                Log.w(TAG, "Couldn't open a local trip", e)
+                Log.w(TAG, "Couldn't open a trip", e)
                 _sessionStartedAt.value = null
                 _logStatus.value = LocalLogStatus.Failed
-                _statusMessage.value = "Couldn't start the session on this device."
+                _statusMessage.value = "Couldn't start the driving session."
             }
         }
     }
@@ -116,18 +113,24 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             _logStatus.value = LocalLogStatus.Saving
             try {
-                repository.recordIncident(
+                val incident = repository.recordIncident(
                     trip = trip,
                     label = result.label,
                     confidence = result.confidence,
                     deviceTimestamp = timestamp
                 )
-                _logStatus.value = LocalLogStatus.SavedOffline
+                _logStatus.value = if (incident.isSynced) {
+                    LocalLogStatus.SavedOnline
+                } else {
+                    LocalLogStatus.SavedOffline
+                }
                 _statusMessage.value = null
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                Log.w(TAG, "Couldn't store incident locally", e)
+                Log.w(TAG, "Couldn't save incident", e)
                 _logStatus.value = LocalLogStatus.Failed
-                _statusMessage.value = "Couldn't save this incident on the device."
+                _statusMessage.value = "Couldn't save this incident."
             }
         }
     }
@@ -154,26 +157,31 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             val saved = try {
                 repository.finishTrip(trip.id, finishedAt)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                Log.w(TAG, "Couldn't close the local trip", e)
+                Log.w(TAG, "Couldn't close trip", e)
                 false
             }
             onResult(
                 if (saved) {
-                    "Trip saved to history. Sync runs automatically when online."
+                    "Trip saved. Offline changes sync automatically when online."
                 } else {
-                    "Couldn't save this trip on the device."
+                    "Couldn't save this trip."
                 }
             )
         }
     }
 
     fun resetSession() {
-        // Sign-out or session expiry can arrive mid-drive; close the local row
-        // so it is not left as an eternal IN_PROGRESS trip.
+        // Sign-out or session expiry can arrive mid-drive, after the token is
+        // already gone. Close the row locally (no auth/network) so it is not left
+        // as an eternal IN_PROGRESS trip; the worker syncs it on next login.
         activeTrip?.let { trip ->
+            val tripId = trip.id
             viewModelScope.launch {
-                runCatching { repository.finishTrip(trip.id, System.currentTimeMillis()) }
+                runCatching { repository.closeTripOffline(tripId, System.currentTimeMillis()) }
+                    .onFailure { Log.w(TAG, "Couldn't close trip on reset", it) }
             }
         }
         activeTrip = null

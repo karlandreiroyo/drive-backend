@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.d_r_i_v_e.backend.AuthSession
 import com.example.d_r_i_v_e.backend.AuthViewModel
+import com.example.d_r_i_v_e.sync.SyncScheduler
 
 @Composable
 fun GoogleLogo(modifier: Modifier = Modifier) {
@@ -301,6 +302,7 @@ fun LoginScreen(
                             onSuccess = { result ->
                                 result.token?.let { token ->
                                     AuthSession.save(context, token, result.user)
+                                    SyncScheduler.enqueue(context)
                                 }
                                 onLoginSuccess()
                             },

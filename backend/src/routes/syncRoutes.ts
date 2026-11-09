@@ -296,4 +296,40 @@ async function dispatchEmergencyEmail(userId: string): Promise<string[]> {
     return emailSentIds;
 }
 
+/**
+ * Returns the authenticated user's trips with their incidents, newest first, so
+ * the client can repopulate its local history cache on login or app startup.
+ * Ownership is scoped to the token's UUID, never a client-supplied id.
+ */
+router.get('/sync/history', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+        const userId = String(req.auth?.userId ?? '').trim();
+        if (!userId) {
+            return res.status(401).json({ success: false, message: 'Authentication required.' });
+        }
+
+        const { data: trips, error } = await supabase
+            .from('trips')
+            .select('id,user_id,start_time,end_time,status,origin,destination,created_at,trip_incidents(id,trip_id,user_id,description,time,incident_type,confidence,device_timestamp,is_synced,email_sent,created_at)')
+            .eq('user_id', userId)
+            .order('start_time', { ascending: false })
+            .limit(200);
+
+        if (error) {
+            console.error('[sync] History fetch error:', error);
+            return res.status(500).json({ success: false, message: 'Failed to load trip history.' });
+        }
+
+        const rows = (trips ?? []).map((trip: Record<string, unknown>) => {
+            const { trip_incidents, ...rest } = trip;
+            return { ...rest, incidents: Array.isArray(trip_incidents) ? trip_incidents : [] };
+        });
+
+        return res.json({ success: true, trips: rows });
+    } catch (err: unknown) {
+        console.error('[sync] Unexpected history error:', err);
+        return res.status(500).json({ success: false, message: 'Server error while loading history.' });
+    }
+});
+
 export default router;

@@ -13,7 +13,8 @@ class DriveApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        // Catches rows stranded by a process death between local write and upload.
+        // Drain any persisted outbox immediately; periodic work is the crash safety net.
+        SyncScheduler.enqueue(this)
         SyncScheduler.schedulePeriodic(this)
         appScope.launch {
             DriveRepository.getInstance(this@DriveApplication).closeOrphanedTrips()

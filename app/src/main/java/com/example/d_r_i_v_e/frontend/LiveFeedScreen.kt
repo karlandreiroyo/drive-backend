@@ -232,11 +232,17 @@ fun LiveFeedScreen(
                     ) {
                         Text(
                             text = when {
-                                isDrivingActive -> "Session Active - Monitoring..."
+                                isDrivingActive && monitorFrame == null -> "Session Active - Calibrating…"
+                                isDrivingActive && monitorFrame?.drowsy == true -> "Session Active - Drowsiness Detected"
+                                isDrivingActive -> "Session Active - Monitoring…"
                                 permissionDenied -> "Camera permission is required to start monitoring."
                                 else -> "No Readings Unavailable"
                             },
-                            color = if (isDrivingActive) Color(0xFF4CD964) else Color.White.copy(alpha = 0.7f),
+                            color = when {
+                                isDrivingActive && monitorFrame?.drowsy == true -> Color(0xFFFF6B6B)
+                                isDrivingActive -> Color(0xFF4CD964)
+                                else -> Color.White.copy(alpha = 0.7f)
+                            },
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Medium
                         )
@@ -282,19 +288,18 @@ fun LiveFeedScreen(
                     ) {
                         MetricCard(
                             label = "Blink Rate:",
-                            value = metrics?.blinkRatePerMinute?.let { "$it bpm" } ?: "--",
+                            value = metrics?.blinkRatePerMinute?.let { "$it bpm" }
+                                ?: if (isDrivingActive) "Calibrating…" else "--",
                             modifier = Modifier.weight(1f)
                         )
                         MetricCard(
                             label = "Eye Closure:",
                             value = when {
-                                metrics == null -> "--"
+                                metrics == null -> if (isDrivingActive) "Calibrating…" else "--"
                                 metrics.drowsy -> "Drowsy"
                                 else -> "Alert"
                             },
-                            sub = metrics
-                                ?.takeIf { it.drowsy }
-                                ?.let { "${(it.drowsinessConfidence * 100).toInt()}% confidence" },
+                            sub = metrics?.let { "${(it.drowsinessConfidence * 100).toInt()}% confidence" },
                             valueColor = when {
                                 metrics?.drowsy == true -> Color(0xFFFF6B6B)
                                 metrics != null -> Color(0xFF4CD964)
@@ -304,7 +309,8 @@ fun LiveFeedScreen(
                         )
                         MetricCard(
                             label = "Head Pose:",
-                            value = metrics?.headPoseLabel ?: "--",
+                            value = metrics?.headPoseLabel
+                                ?: if (isDrivingActive) "Calibrating…" else "--",
                             sub = metrics?.let { "${(it.headPoseConfidence * 100).toInt()}% confident" },
                             modifier = Modifier.weight(1f)
                         )
@@ -443,7 +449,7 @@ private fun DetectionAlertBanner(
         Text(
             text = logLabel(logStatus),
             color = when (logStatus) {
-                LocalLogStatus.SavedOffline -> Color(0xFF4CD964)
+                LocalLogStatus.SavedOnline, LocalLogStatus.SavedOffline -> Color(0xFF4CD964)
                 LocalLogStatus.Failed -> Color(0xFFFF6B6B)
                 else -> Color.White.copy(alpha = 0.6f)
             },
@@ -456,6 +462,7 @@ private fun DetectionAlertBanner(
 private fun logLabel(status: LocalLogStatus): String = when (status) {
     LocalLogStatus.Idle -> ""
     LocalLogStatus.Saving -> "Saving…"
+    LocalLogStatus.SavedOnline -> "Saved online"
     LocalLogStatus.SavedOffline -> "Saved offline"
     LocalLogStatus.Failed -> "Save failed"
 }

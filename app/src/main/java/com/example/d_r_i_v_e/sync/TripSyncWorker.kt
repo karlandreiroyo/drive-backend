@@ -34,6 +34,11 @@ class TripSyncWorker(
                 Result.failure()
             }
 
+            is SyncOutcome.ConnectionFailed -> {
+                Log.w(TAG, "Sync connection unavailable: ${outcome.message}")
+                Result.retry()
+            }
+
             is SyncOutcome.Retryable -> {
                 Log.w(TAG, "Sync will retry: ${outcome.message}")
                 Result.retry()

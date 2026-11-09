@@ -111,12 +111,13 @@ fun AppNavigation() {
     val reportViewModel: ReportViewModel = viewModel()
     val reportState by reportViewModel.state.collectAsState()
 
-    // Full sign-out: drop stored credentials and user-scoped state before the
-    // navigation host replaces the stack with the unauthenticated root.
+    // Full sign-out: close any active trip and drop user-scoped state while the
+    // session is still intact, then clear credentials. Room history is preserved
+    // (pending rows sync on next login); the stack returns to the auth root.
     fun clearSession() {
-        AuthSession.clear(context)
         detectionViewModel.resetSession()
         tripHistoryViewModel.clear()
+        AuthSession.clear(context)
         welcomeName = null
         selectedGoogleAccount = null
         knownAccounts = emptyList()
@@ -131,6 +132,7 @@ fun AppNavigation() {
         AuthSession.restore(context)
         if (!AuthSession.token.isNullOrBlank()) {
             resetTo("dashboard")
+            tripHistoryViewModel.refresh()
         }
         AuthSession.expiredEvents.collect {
             clearSession()
@@ -179,6 +181,7 @@ fun AppNavigation() {
                 welcomeName = AuthSession.user?.fullName?.trim()?.takeIf { it.isNotBlank() }
                 // Lock the dashboard as the root so Back can never reach Login.
                 resetTo("dashboard")
+                tripHistoryViewModel.refresh()
             },
             onUnverified = { email ->
                 otpIdentifier = email.trim().lowercase()
