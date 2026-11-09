@@ -39,6 +39,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -51,7 +52,8 @@ import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
 import com.example.d_r_i_v_e.backend.routes.LocalLogStatus
 import com.example.d_r_i_v_e.ml.DetectionAnalyzer
 import com.example.d_r_i_v_e.ml.DetectionResult
-import com.example.d_r_i_v_e.ml.MotionDetector
+import com.example.d_r_i_v_e.ml.DriverMonitorFrame
+import com.example.d_r_i_v_e.ml.HeuristicDriverMonitor
 import kotlinx.coroutines.delay
 import java.util.Locale
 import java.util.concurrent.Executor
@@ -73,6 +75,7 @@ fun LiveFeedScreen(
     val lastEvent by detectionViewModel.lastEvent.collectAsState()
     val logStatus by detectionViewModel.logStatus.collectAsState()
     val statusMessage by detectionViewModel.statusMessage.collectAsState()
+    val monitorFrame by detectionViewModel.monitorFrame.collectAsState()
 
     // Latest detection kept for the exit animation of the banner.
     var showAlert by remember { mutableStateOf(false) }
@@ -186,7 +189,8 @@ fun LiveFeedScreen(
                     ) {
                         if (isDrivingActive && hasCameraPermission) {
                             CameraPreview(
-                                onDetection = onFrameDetection,
+                                onFrame = { frame -> detectionViewModel.onMonitorFrame(frame) },
+                                onEvent = onFrameDetection,
                                 modifier = Modifier.fillMaxSize()
                             )
                             LiveBadge(
@@ -270,24 +274,38 @@ fun LiveFeedScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Metrics Row
+                    // Metrics Row — values come from the per-frame monitor.
+                    val metrics = monitorFrame
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         MetricCard(
                             label = "Blink Rate:",
-                            value = if (isDrivingActive) "18 bpm" else "--",
+                            value = metrics?.blinkRatePerMinute?.let { "$it bpm" } ?: "--",
                             modifier = Modifier.weight(1f)
                         )
                         MetricCard(
                             label = "Eye Closure:",
-                            value = if (isDrivingActive) "Normal" else "--",
+                            value = when {
+                                metrics == null -> "--"
+                                metrics.drowsy -> "Drowsy"
+                                else -> "Alert"
+                            },
+                            sub = metrics
+                                ?.takeIf { it.drowsy }
+                                ?.let { "${(it.drowsinessConfidence * 100).toInt()}% confidence" },
+                            valueColor = when {
+                                metrics?.drowsy == true -> Color(0xFFFF6B6B)
+                                metrics != null -> Color(0xFF4CD964)
+                                else -> Color.White
+                            },
                             modifier = Modifier.weight(1f)
                         )
                         MetricCard(
                             label = "Head Pose:",
-                            value = if (isDrivingActive) "Centered" else "--",
+                            value = metrics?.headPoseLabel ?: "--",
+                            sub = metrics?.let { "${(it.headPoseConfidence * 100).toInt()}% confident" },
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -444,7 +462,8 @@ private fun logLabel(status: LocalLogStatus): String = when (status) {
 
 @Composable
 private fun CameraPreview(
-    onDetection: (DetectionResult) -> Unit,
+    onFrame: (DriverMonitorFrame) -> Unit,
+    onEvent: (DetectionResult) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -457,13 +476,16 @@ private fun CameraPreview(
     }
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
-    val latestOnDetection = rememberUpdatedState(onDetection)
+    val latestOnFrame = rememberUpdatedState(onFrame)
+    val latestOnEvent = rememberUpdatedState(onEvent)
 
-    // Swap MotionDetector for a TensorFlow Lite FrameDetector once the model ships.
+    // Swap HeuristicDriverMonitor for the TensorFlow Lite DriverMonitor once
+    // the trained model ships; the callbacks below stay unchanged.
     val analyzer = remember {
         DetectionAnalyzer(
-            detector = MotionDetector(),
-            onDetection = { result -> latestOnDetection.value(result) }
+            monitor = HeuristicDriverMonitor(),
+            onEvent = { result -> latestOnEvent.value(result) },
+            onFrame = { frame -> latestOnFrame.value(frame) }
         )
     }
 
@@ -554,7 +576,9 @@ private fun formatTripDuration(totalSeconds: Long): String {
 private fun MetricCard(
     label: String,
     value: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    sub: String? = null,
+    valueColor: Color = Color.White
 ) {
     Column(
         modifier = modifier
@@ -566,14 +590,27 @@ private fun MetricCard(
         Text(
             text = label,
             color = Color.White.copy(alpha = 0.6f),
-            fontSize = 11.sp
+            fontSize = 11.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
         Spacer(modifier = Modifier.height(4.dp))
         Text(
             text = value,
-            color = Color.White,
+            color = valueColor,
             fontSize = 13.sp,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
+        if (sub != null) {
+            Text(
+                text = sub,
+                color = Color.White.copy(alpha = 0.5f),
+                fontSize = 10.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }

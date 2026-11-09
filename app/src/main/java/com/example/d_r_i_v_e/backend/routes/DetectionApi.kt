@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.d_r_i_v_e.backend.AuthSession
 import com.example.d_r_i_v_e.database.TripEntity
 import com.example.d_r_i_v_e.ml.DetectionResult
+import com.example.d_r_i_v_e.ml.DriverMonitorFrame
 import com.example.d_r_i_v_e.repository.DriveRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -45,6 +46,10 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
     private val _lastEvent = MutableStateFlow<DetectionEvent?>(null)
     val lastEvent: StateFlow<DetectionEvent?> = _lastEvent.asStateFlow()
 
+    // Latest per-frame metrics from the monitor; drives the Live Feed cards.
+    private val _monitorFrame = MutableStateFlow<DriverMonitorFrame?>(null)
+    val monitorFrame: StateFlow<DriverMonitorFrame?> = _monitorFrame.asStateFlow()
+
     private val _logStatus = MutableStateFlow(LocalLogStatus.Idle)
     val logStatus: StateFlow<LocalLogStatus> = _logStatus.asStateFlow()
 
@@ -73,6 +78,7 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         _sessionDetectionCount.value = 0
         _sessionIncidents.value = emptyList()
         _lastEvent.value = null
+        _monitorFrame.value = null
         _logStatus.value = LocalLogStatus.Idle
         _statusMessage.value = null
 
@@ -87,6 +93,11 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
                 _statusMessage.value = "Couldn't start the session on this device."
             }
         }
+    }
+
+    /** Called on the analyzer thread for every analyzed frame. */
+    fun onMonitorFrame(frame: DriverMonitorFrame) {
+        _monitorFrame.value = frame
     }
 
     fun onDetection(result: DetectionResult) {
@@ -131,6 +142,7 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         _sessionDetectionCount.value = 0
         _sessionIncidents.value = emptyList()
         _lastEvent.value = null
+        _monitorFrame.value = null
         _logStatus.value = LocalLogStatus.Idle
         _statusMessage.value = null
 
@@ -169,6 +181,7 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         _sessionDetectionCount.value = 0
         _sessionIncidents.value = emptyList()
         _lastEvent.value = null
+        _monitorFrame.value = null
         _logStatus.value = LocalLogStatus.Idle
         _statusMessage.value = null
     }
