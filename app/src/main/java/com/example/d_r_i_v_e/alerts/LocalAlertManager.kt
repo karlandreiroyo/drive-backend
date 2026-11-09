@@ -20,9 +20,9 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Fires the on-device alarm chain: bundled tone, TTS warning, and vibration.
- * Nothing here performs a network request, so alerts keep working with the
- * radio off, no SIM, and no backend reachability.
+ * Fires the on-device alarm chain: bundled tone, TTS warning, vibration, and
+ * the attached peripheral bridge. Nothing here performs a network request, so
+ * alerts keep working with the radio off, no SIM, and no backend reachability.
  */
 class LocalAlertManager(context: Context) {
     private val appContext = context.applicationContext
@@ -82,6 +82,9 @@ class LocalAlertManager(context: Context) {
      */
     fun triggerDetectionAlert(label: String, confidence: Float) {
         if (released.get()) return
+        // Fired before the main-thread hop so a BLE/OTG peripheral reacts even
+        // if the UI thread is busy.
+        HardwareAlertRegistry.fire(label, confidence)
         val percent = (confidence.coerceIn(0f, 1f) * 100).toInt()
         val message = "Warning! $label detected, $percent percent confidence"
         mainHandler.post {
