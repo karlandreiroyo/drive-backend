@@ -52,6 +52,7 @@ export const env = {
     semaphoreApiKey: process.env.SEMAPHORE_API_KEY ?? '',
     semaphoreSenderName: process.env.SEMAPHORE_SENDER_NAME ?? '',
     semaphoreApiUrl: optional('SEMAPHORE_API_URL', 'https://api.semaphore.co/api/v4/messages'),
+    deviceApiKey: process.env.DEVICE_API_KEY ?? '',
 };
 
 if (env.supabaseKeyRole === 'anon') {
@@ -64,4 +65,11 @@ if (env.supabaseKeyRole === 'anon') {
 
 if (!process.env.JWT_SECRET) {
     console.warn('[env] JWT_SECRET is not set. Add a long random secret to backend/.env.');
+}
+
+if (!env.deviceApiKey) {
+    console.warn(
+        '[env] DEVICE_API_KEY is not set. The Raspberry Pi hardware bridge ' +
+        '(POST /api/device/heartbeat) will reject status updates until you add it.'
+    );
 }

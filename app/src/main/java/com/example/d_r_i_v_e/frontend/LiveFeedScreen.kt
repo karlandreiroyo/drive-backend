@@ -76,6 +76,7 @@ fun LiveFeedScreen(
     val logStatus by detectionViewModel.logStatus.collectAsState()
     val statusMessage by detectionViewModel.statusMessage.collectAsState()
     val monitorFrame by detectionViewModel.monitorFrame.collectAsState()
+    val hardwareStatus by detectionViewModel.hardwareStatus.collectAsState()
 
     // Latest detection kept for the exit animation of the banner.
     var showAlert by remember { mutableStateOf(false) }
@@ -246,6 +247,43 @@ fun LiveFeedScreen(
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Medium
                         )
+                    }
+
+                    // Hardware node link (Raspberry Pi + ESP32), polled live.
+                    if (isDrivingActive) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (hardwareStatus.esp32Connected) Color(0xFF4CD964)
+                                        else Color(0xFFFF6B6B)
+                                    )
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "ESP32: " +
+                                    if (hardwareStatus.esp32Connected) "CONNECTED" else "DISCONNECTED",
+                                color = if (hardwareStatus.esp32Connected) Color(0xFF4CD964)
+                                else Color(0xFFFF6B6B),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                            if (hardwareStatus.alertActive) {
+                                Text(
+                                    text = " · Drowsy alert",
+                                    color = Color(0xFFFF6B6B),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
                     }
 
                     // Sync summary

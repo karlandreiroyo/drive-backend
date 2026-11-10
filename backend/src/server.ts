@@ -10,6 +10,7 @@ import reportsRouter from './routes/reportsRoutes.js';
 import detectionsRouter from './routes/detectionsRoutes.js';
 import tripsRouter from './routes/tripsRoutes.js';
 import syncRouter from './routes/syncRoutes.js';
+import deviceRouter from './routes/deviceRoutes.js';
 
 const app: Application = express();
 
@@ -65,6 +66,7 @@ app.use('/api', authLimiter, reportsRouter);
 app.use('/api', detectionLimiter, detectionsRouter);
 app.use('/api', detectionLimiter, tripsRouter);
 app.use('/api', detectionLimiter, syncRouter);
+app.use('/api', detectionLimiter, deviceRouter);
 
 app.use((_req: Request, res: Response) => {
     res.status(404).json({

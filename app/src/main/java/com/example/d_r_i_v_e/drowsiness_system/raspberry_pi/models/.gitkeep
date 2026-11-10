@@ -1,0 +1,8 @@
+Place your trained YOLO classification weights here as "best.pt".
+
+Expected path: raspberry_pi/models/best.pt
+The model must be a classification model (main.py reads results[0].probs.top1),
+with drowsy class names among: drowsy, sleepy, closed.
+
+This .gitkeep file only exists so the empty models/ folder is tracked by git.
+You can delete it once best.pt is in place.

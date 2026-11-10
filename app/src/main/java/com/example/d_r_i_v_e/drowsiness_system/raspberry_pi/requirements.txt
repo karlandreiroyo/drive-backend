@@ -1,0 +1,17 @@
+# Raspberry Pi drowsiness-detection node dependencies.
+#
+# IMPORTANT (Raspberry Pi OS): Picamera2 and its OpenCV dependency are provided
+# by apt, NOT pip. Installing opencv-python / picamera2 from pip on the Pi can
+# conflict with the system libcamera stack. Recommended install order:
+#
+#   sudo apt update
+#   sudo apt install -y python3-picamera2 python3-opencv python3-serial
+#   pip install --break-system-packages ultralytics pyserial
+#
+# Then, on the Pi, you can skip the picamera2/opencv lines below (already via apt).
+# The list below is the complete dependency set for a generic pip environment.
+
+ultralytics>=8.0.0
+opencv-python>=4.8.0
+pyserial>=3.5
+picamera2>=0.3.12

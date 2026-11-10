@@ -10,10 +10,13 @@ import com.example.d_r_i_v_e.ml.DetectionResult
 import com.example.d_r_i_v_e.ml.DriverMonitorFrame
 import com.example.d_r_i_v_e.repository.DriveRepository
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 data class DetectionEvent(
@@ -44,6 +47,11 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
     // Latest per-frame metrics from the monitor; drives the Live Feed cards.
     private val _monitorFrame = MutableStateFlow<DriverMonitorFrame?>(null)
     val monitorFrame: StateFlow<DriverMonitorFrame?> = _monitorFrame.asStateFlow()
+
+    // Live status of the Raspberry Pi + ESP32 node, polled while a session runs.
+    private val _hardwareStatus = MutableStateFlow(HardwareStatus())
+    val hardwareStatus: StateFlow<HardwareStatus> = _hardwareStatus.asStateFlow()
+    private var hardwarePollJob: Job? = null
 
     private val _logStatus = MutableStateFlow(LocalLogStatus.Idle)
     val logStatus: StateFlow<LocalLogStatus> = _logStatus.asStateFlow()
@@ -80,6 +88,7 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             try {
                 activeTrip = repository.startTrip(userId, startedAt)
+                startHardwarePolling()
                 onReady()
             } catch (e: CancellationException) {
                 throw e
@@ -95,6 +104,22 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
     /** Called on the analyzer thread for every analyzed frame. */
     fun onMonitorFrame(frame: DriverMonitorFrame) {
         _monitorFrame.value = frame
+    }
+
+    private fun startHardwarePolling() {
+        if (hardwarePollJob?.isActive == true) return
+        hardwarePollJob = viewModelScope.launch {
+            while (isActive) {
+                _hardwareStatus.value = DeviceApiClient.fetchStatus()
+                delay(2_500)
+            }
+        }
+    }
+
+    private fun stopHardwarePolling() {
+        hardwarePollJob?.cancel()
+        hardwarePollJob = null
+        _hardwareStatus.value = HardwareStatus()
     }
 
     fun onDetection(result: DetectionResult) {
@@ -148,6 +173,7 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         _monitorFrame.value = null
         _logStatus.value = LocalLogStatus.Idle
         _statusMessage.value = null
+        stopHardwarePolling()
 
         if (trip == null || startedAt == null) {
             onResult("No active driving session.")
@@ -192,6 +218,7 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         _monitorFrame.value = null
         _logStatus.value = LocalLogStatus.Idle
         _statusMessage.value = null
+        stopHardwarePolling()
     }
 
     private companion object {
