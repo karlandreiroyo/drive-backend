@@ -93,6 +93,7 @@ fun LiveFeedScreen(
         )
     }
     var permissionDenied by remember { mutableStateOf(false) }
+    var cameraError by remember { mutableStateOf<String?>(null) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -192,6 +193,7 @@ fun LiveFeedScreen(
                             CameraPreview(
                                 onFrame = { frame -> detectionViewModel.onMonitorFrame(frame) },
                                 onEvent = onFrameDetection,
+                                onError = { message -> cameraError = message },
                                 modifier = Modifier.fillMaxSize()
                             )
                             LiveBadge(
@@ -233,6 +235,9 @@ fun LiveFeedScreen(
                     ) {
                         Text(
                             text = when {
+                                logStatus == LocalLogStatus.Failed ->
+                                    statusMessage ?: "Couldn't start the session."
+                                cameraError != null -> cameraError ?: "Camera error"
                                 isDrivingActive && monitorFrame == null -> "Session Active - Calibrating…"
                                 isDrivingActive && monitorFrame?.drowsy == true -> "Session Active - Drowsiness Detected"
                                 isDrivingActive -> "Session Active - Monitoring…"
@@ -240,6 +245,8 @@ fun LiveFeedScreen(
                                 else -> "No Readings Unavailable"
                             },
                             color = when {
+                                logStatus == LocalLogStatus.Failed || cameraError != null ->
+                                    Color(0xFFFF6B6B)
                                 isDrivingActive && monitorFrame?.drowsy == true -> Color(0xFFFF6B6B)
                                 isDrivingActive -> Color(0xFF4CD964)
                                 else -> Color.White.copy(alpha = 0.7f)
@@ -306,7 +313,7 @@ fun LiveFeedScreen(
                         )
                     }
 
-                    if (isDrivingActive && statusMessage != null && logStatus == LocalLogStatus.Failed) {
+                    if (statusMessage != null && logStatus == LocalLogStatus.Failed) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = statusMessage ?: "",
@@ -367,6 +374,7 @@ fun LiveFeedScreen(
                                 }
                             } else if (hasCameraPermission) {
                                 permissionDenied = false
+                                cameraError = null
                                 detectionViewModel.startSession { isDrivingActive = true }
                             } else {
                                 permissionLauncher.launch(Manifest.permission.CAMERA)
@@ -509,6 +517,7 @@ private fun logLabel(status: LocalLogStatus): String = when (status) {
 private fun CameraPreview(
     onFrame: (DriverMonitorFrame) -> Unit,
     onEvent: (DetectionResult) -> Unit,
+    onError: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -523,6 +532,7 @@ private fun CameraPreview(
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     val latestOnFrame = rememberUpdatedState(onFrame)
     val latestOnEvent = rememberUpdatedState(onEvent)
+    val latestOnError = rememberUpdatedState(onError)
 
     // Swap HeuristicDriverMonitor for the TensorFlow Lite DriverMonitor once
     // the trained model ships; the callbacks below stay unchanged.
@@ -540,7 +550,11 @@ private fun CameraPreview(
 
         val listener = Runnable {
             if (disposed) return@Runnable
-            val cameraProvider = runCatching { cameraProviderFuture.get() }.getOrNull() ?: return@Runnable
+            val cameraProvider = runCatching { cameraProviderFuture.get() }.getOrNull()
+            if (cameraProvider == null) {
+                latestOnError.value("Camera unavailable on this device.")
+                return@Runnable
+            }
             val preview = Preview.Builder()
                 .build()
                 .also { it.surfaceProvider = previewView.surfaceProvider }
@@ -551,15 +565,27 @@ private fun CameraPreview(
                 .also { it.setAnalyzer(analysisExecutor, analyzer) }
 
             try {
+                // Front camera is what the drowsiness model expects; fall back
+                // to the back camera on devices/emulators without one instead
+                // of failing the whole session silently.
+                val cameraSelector = runCatching {
+                    if (cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
+                        CameraSelector.DEFAULT_FRONT_CAMERA
+                    } else {
+                        CameraSelector.DEFAULT_BACK_CAMERA
+                    }
+                }.getOrDefault(CameraSelector.DEFAULT_BACK_CAMERA)
+
                 cameraProvider.unbindAll()
                 cameraProvider.bindToLifecycle(
                     lifecycleOwner,
-                    CameraSelector.DEFAULT_FRONT_CAMERA,
+                    cameraSelector,
                     preview,
                     imageAnalysis
                 )
             } catch (e: Exception) {
                 Log.e("LiveFeedScreen", "Unable to start camera preview", e)
+                latestOnError.value("Camera failed to start: ${e.message ?: "unknown error"}")
             }
         }
 
