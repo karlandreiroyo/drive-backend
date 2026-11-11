@@ -1,6 +1,7 @@
 package com.example.d_r_i_v_e.repository
 
 import android.content.Context
+import android.util.Log
 import com.example.d_r_i_v_e.backend.AuthSession
 import com.example.d_r_i_v_e.backend.routes.HistoryOutcome
 import com.example.d_r_i_v_e.backend.routes.RemoteIncidentDto
@@ -20,6 +21,7 @@ import com.example.d_r_i_v_e.sync.SyncScheduler
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -50,22 +52,20 @@ class DriveRepository private constructor(context: Context) {
             destination = "Destination"
         )
 
-        when (val outcome = upload(tripRequest(trip))) {
-            is SyncOutcome.Success -> {
-                requireAck(outcome.response.tripsSynced, trip.id, "trip")
-                val syncedTrip = trip.copy(isSynced = true)
-                tripDao.upsert(syncedTrip)
-                syncedTrip
-            }
+        Log.d(TAG, "Trip startup: attempting remote write")
+        val outcome = withTimeoutOrNull(START_UPLOAD_TIMEOUT_MS) {
+            upload(tripRequest(trip))
+        } ?: SyncOutcome.ConnectionFailed("Trip startup upload timed out.")
+        if (outcome is SyncOutcome.Unauthorized) throw writeFailure(outcome)
 
-            is SyncOutcome.ConnectionFailed -> {
-                tripDao.upsert(trip)
-                SyncScheduler.enqueue(appContext)
-                trip
-            }
-
-            else -> throw writeFailure(outcome)
+        val acknowledged = outcome is SyncOutcome.Success && trip.id in outcome.response.tripsSynced
+        if (!acknowledged) {
+            Log.w(TAG, "Trip startup queued locally; outcome=${outcome.javaClass.simpleName}, acknowledged=false")
         }
+        val storedTrip = trip.copy(isSynced = acknowledged)
+        tripDao.upsert(storedTrip)
+        if (!acknowledged) SyncScheduler.enqueue(appContext)
+        storedTrip
     }
 
     suspend fun recordIncident(
@@ -348,6 +348,8 @@ class DriveRepository private constructor(context: Context) {
     }
 
     companion object {
+        private const val TAG = "DriveRepository"
+        private const val START_UPLOAD_TIMEOUT_MS = 5_000L
         private const val MAX_TRIPS = 100
         private const val MAX_INCIDENTS = 300
         private const val MAX_DELETES = 100

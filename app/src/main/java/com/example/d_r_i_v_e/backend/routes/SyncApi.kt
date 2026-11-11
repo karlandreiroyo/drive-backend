@@ -141,6 +141,7 @@ object SyncApiClient {
     suspend fun sync(request: SyncRequestDto): SyncOutcome = withContext(Dispatchers.IO) {
         try {
             val response = service.sync(request)
+            if (!response.isSuccessful) Log.w(TAG, "Sync HTTP ${response.code()}")
             when {
                 response.isSuccessful -> {
                     val body = response.body()

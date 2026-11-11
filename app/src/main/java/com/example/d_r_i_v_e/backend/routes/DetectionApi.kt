@@ -27,10 +27,15 @@ data class DetectionEvent(
 
 /** State of the repository write: online acknowledgement or offline queue. */
 enum class LocalLogStatus { Idle, Saving, SavedOnline, SavedOffline, Failed }
+enum class DrivingSessionState { Idle, Starting, Active, Stopping }
 
 /** Owns the driving session while the repository routes writes online or offline. */
 class DetectionViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = DriveRepository.getInstance(application)
+
+    private val _sessionState = MutableStateFlow(DrivingSessionState.Idle)
+    val sessionState: StateFlow<DrivingSessionState> = _sessionState.asStateFlow()
+    private var sessionGeneration = 0
 
     private val _sessionDetectionCount = MutableStateFlow(0)
     val sessionDetectionCount: StateFlow<Int> = _sessionDetectionCount.asStateFlow()
@@ -59,51 +64,74 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
     private val _statusMessage = MutableStateFlow<String?>(null)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
 
-    // The camera must not start before this row exists, so the UI waits for
-    // [onReady] instead of trusting a fire-and-forget insert.
+    @Volatile
     private var activeTrip: TripEntity? = null
 
-    fun startSession(onReady: () -> Unit = {}) {
-        if (activeTrip != null) {
-            onReady()
-            return
-        }
+    fun startSession() {
+        if (_sessionState.value != DrivingSessionState.Idle) return
 
         val userId = AuthSession.user?.id?.takeIf { it.isNotBlank() }
-        if (userId == null) {
+        if (userId == null || AuthSession.token.isNullOrBlank()) {
             _logStatus.value = LocalLogStatus.Failed
             _statusMessage.value = "Log in again to start a driving session."
             return
         }
 
+        val generation = ++sessionGeneration
         val startedAt = System.currentTimeMillis()
-        _sessionStartedAt.value = startedAt
+        _sessionState.value = DrivingSessionState.Starting
+        _sessionStartedAt.value = null
         _sessionDetectionCount.value = 0
         _sessionIncidents.value = emptyList()
         _lastEvent.value = null
         _monitorFrame.value = null
         _logStatus.value = LocalLogStatus.Idle
         _statusMessage.value = null
+        Log.d(TAG, "Session startup: opening trip")
 
         viewModelScope.launch {
             try {
-                activeTrip = repository.startTrip(userId, startedAt)
+                val trip = repository.startTrip(userId, startedAt)
+                // A completed request must not reactivate a session after logout.
+                if (generation != sessionGeneration || AuthSession.user?.id != userId ||
+                    AuthSession.token.isNullOrBlank()
+                ) {
+                    repository.closeTripOffline(trip.id)
+                    if (generation == sessionGeneration) resetSession()
+                    return@launch
+                }
+                activeTrip = trip
+                _sessionStartedAt.value = trip.startTime
+                _sessionState.value = DrivingSessionState.Active
                 startHardwarePolling()
-                onReady()
+                Log.d(TAG, "Session startup: trip ready, synced=${trip.isSynced}")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.w(TAG, "Couldn't open a trip", e)
+                Log.e(TAG, "Session startup failed while opening trip", e)
+                if (generation != sessionGeneration) return@launch
+                activeTrip = null
+                _sessionState.value = DrivingSessionState.Idle
                 _sessionStartedAt.value = null
                 _logStatus.value = LocalLogStatus.Failed
-                _statusMessage.value = "Couldn't start the driving session."
+                _statusMessage.value = "Couldn't start the driving session (${e.javaClass.simpleName}). Check Logcat: $TAG."
             }
         }
     }
 
+    fun onCameraError(message: String) {
+        if (_sessionState.value != DrivingSessionState.Active) return
+        resetSession()
+        _logStatus.value = LocalLogStatus.Failed
+        _statusMessage.value = message
+    }
+
     /** Called on the analyzer thread for every analyzed frame. */
     fun onMonitorFrame(frame: DriverMonitorFrame) {
-        _monitorFrame.value = frame
+        val trip = activeTrip ?: return
+        viewModelScope.launch {
+            if (activeTrip?.id == trip.id) _monitorFrame.value = frame
+        }
     }
 
     private fun startHardwarePolling() {
@@ -124,26 +152,26 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun onDetection(result: DetectionResult) {
         val trip = activeTrip ?: return
-
-        _sessionDetectionCount.update { it + 1 }
         val event = DetectionEvent(
             label = result.label,
             confidence = result.confidence,
             timestamp = System.currentTimeMillis()
         )
-        _lastEvent.value = event
-        _sessionIncidents.update { (it + event).takeLast(500) }
 
-        val timestamp = event.timestamp
         viewModelScope.launch {
+            if (activeTrip?.id != trip.id || _sessionState.value != DrivingSessionState.Active) return@launch
+            _sessionDetectionCount.update { it + 1 }
+            _lastEvent.value = event
+            _sessionIncidents.update { (it + event).takeLast(500) }
             _logStatus.value = LocalLogStatus.Saving
             try {
                 val incident = repository.recordIncident(
                     trip = trip,
                     label = result.label,
                     confidence = result.confidence,
-                    deviceTimestamp = timestamp
+                    deviceTimestamp = event.timestamp
                 )
+                if (activeTrip?.id != trip.id) return@launch
                 _logStatus.value = if (incident.isSynced) {
                     LocalLogStatus.SavedOnline
                 } else {
@@ -153,7 +181,8 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.w(TAG, "Couldn't save incident", e)
+                Log.e(TAG, "Couldn't save incident", e)
+                if (activeTrip?.id != trip.id) return@launch
                 _logStatus.value = LocalLogStatus.Failed
                 _statusMessage.value = "Couldn't save this incident."
             }
@@ -161,10 +190,12 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun finishSession(onResult: (String) -> Unit = {}) {
-        val trip = activeTrip
-        val startedAt = _sessionStartedAt.value
+        if (_sessionState.value != DrivingSessionState.Active) return
+        val trip = activeTrip ?: return
+        val generation = ++sessionGeneration
         val finishedAt = System.currentTimeMillis()
 
+        _sessionState.value = DrivingSessionState.Stopping
         activeTrip = null
         _sessionStartedAt.value = null
         _sessionDetectionCount.value = 0
@@ -175,19 +206,28 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         _statusMessage.value = null
         stopHardwarePolling()
 
-        if (trip == null || startedAt == null) {
-            onResult("No active driving session.")
-            return
-        }
-
         viewModelScope.launch {
             val saved = try {
                 repository.finishTrip(trip.id, finishedAt)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.w(TAG, "Couldn't close trip", e)
-                false
+                Log.e(TAG, "Couldn't close trip remotely; trying local storage", e)
+                try {
+                    repository.closeTripOffline(trip.id, finishedAt)
+                    true
+                } catch (localError: CancellationException) {
+                    throw localError
+                } catch (localError: Exception) {
+                    Log.e(TAG, "Couldn't close trip locally", localError)
+                    false
+                }
+            }
+            if (generation != sessionGeneration) return@launch
+            _sessionState.value = DrivingSessionState.Idle
+            if (!saved) {
+                _logStatus.value = LocalLogStatus.Failed
+                _statusMessage.value = "Couldn't save this trip. Check Logcat: $TAG."
             }
             onResult(
                 if (saved) {
@@ -200,17 +240,10 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun resetSession() {
-        // Sign-out or session expiry can arrive mid-drive, after the token is
-        // already gone. Close the row locally (no auth/network) so it is not left
-        // as an eternal IN_PROGRESS trip; the worker syncs it on next login.
-        activeTrip?.let { trip ->
-            val tripId = trip.id
-            viewModelScope.launch {
-                runCatching { repository.closeTripOffline(tripId, System.currentTimeMillis()) }
-                    .onFailure { Log.w(TAG, "Couldn't close trip on reset", it) }
-            }
-        }
+        ++sessionGeneration
+        val trip = activeTrip
         activeTrip = null
+        _sessionState.value = DrivingSessionState.Idle
         _sessionStartedAt.value = null
         _sessionDetectionCount.value = 0
         _sessionIncidents.value = emptyList()
@@ -219,6 +252,17 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         _logStatus.value = LocalLogStatus.Idle
         _statusMessage.value = null
         stopHardwarePolling()
+        if (trip != null) {
+            viewModelScope.launch {
+                try {
+                    repository.closeTripOffline(trip.id)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e(TAG, "Couldn't close trip on reset", e)
+                }
+            }
+        }
     }
 
     private companion object {
