@@ -76,7 +76,7 @@ DISCONNECT_WARN_INTERVAL = 3.0  # rate-limit the console warning while disconnec
 #   export DEVICE_API_KEY="the-railway-device-key"
 # --------------------------------------------------------------------------- #
 BACKEND_BASE_URL = "https://drive-backend.up.railway.app"
-DEVICE_USER_ID = os.environ.get("DEVICE_USER_ID", "")
-DEVICE_API_KEY = os.environ.get("DEVICE_API_KEY", "")
+DEVICE_USER_ID = os.environ.get("DEVICE_USER_ID", "40")
+DEVICE_API_KEY = os.environ.get("DEVICE_API_KEY", "c410909fb3fda8f5f30328a38f88c71759c0a36ecd0cdfca")
 HEARTBEAT_INTERVAL = 2.0   # seconds between status posts to the backend
 BACKEND_TIMEOUT = 3.0      # give up on a backend POST after this many seconds

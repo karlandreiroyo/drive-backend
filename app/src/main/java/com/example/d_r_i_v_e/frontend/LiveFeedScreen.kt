@@ -55,6 +55,8 @@ import com.example.d_r_i_v_e.alerts.rememberLocalAlertManager
 import com.example.d_r_i_v_e.backend.routes.DetectionEvent
 import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
 import com.example.d_r_i_v_e.backend.routes.DrivingSessionState
+import com.example.d_r_i_v_e.backend.routes.HardwareConnection
+import com.example.d_r_i_v_e.backend.routes.HardwareStatus
 import com.example.d_r_i_v_e.backend.routes.LocalLogStatus
 import com.example.d_r_i_v_e.ml.DetectionAnalyzer
 import com.example.d_r_i_v_e.ml.DetectionResult
@@ -67,6 +69,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 @Composable
 fun LiveFeedScreen(
+    hardwareStatus: HardwareStatus = HardwareStatus(),
     onTabDashboardClick: () -> Unit = {},
     onTabCameraClick: () -> Unit = {},
     onTabMapClick: () -> Unit = {},
@@ -86,7 +89,6 @@ fun LiveFeedScreen(
     val logStatus by detectionViewModel.logStatus.collectAsState()
     val statusMessage by detectionViewModel.statusMessage.collectAsState()
     val monitorFrame by detectionViewModel.monitorFrame.collectAsState()
-    val hardwareStatus by detectionViewModel.hardwareStatus.collectAsState()
 
     // Latest detection kept for the exit animation of the banner.
     var showAlert by remember { mutableStateOf(false) }
@@ -296,8 +298,14 @@ fun LiveFeedScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "ESP32: " +
-                                    if (hardwareStatus.esp32Connected) "CONNECTED" else "DISCONNECTED",
+                                text = when (hardwareStatus.connection) {
+                                    HardwareConnection.Connected -> "ESP32: CONNECTED"
+                                    HardwareConnection.Checking -> "ESP32: CHECKING BRIDGE…"
+                                    HardwareConnection.BridgeOffline -> "ESP32: BRIDGE OFFLINE"
+                                    HardwareConnection.SerialDisconnected -> "ESP32: NO SERIAL HANDSHAKE"
+                                    HardwareConnection.Unavailable -> "ESP32: STATUS UNAVAILABLE"
+                                    HardwareConnection.Unauthorized -> "ESP32: LOGIN REQUIRED"
+                                },
                                 color = if (hardwareStatus.esp32Connected) Color(0xFF4CD964)
                                 else Color(0xFFFF6B6B),
                                 fontSize = 12.sp,
@@ -314,15 +322,25 @@ fun LiveFeedScreen(
                         }
                     }
 
+                    if (isDrivingActive && hardwareStatus.message != null) {
+                        Text(
+                            text = hardwareStatus.message,
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+
                     // Sync summary
                     if (isDrivingActive && detectionCount > 0) {
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(
                             text = buildString {
                                 append(detectionCount)
-                                append(if (detectionCount == 1) " detection logged" else " detections logged")
+                                append(if (detectionCount == 1) " detection" else " detections")
                                 append(" · ")
                                 append(logLabel(logStatus))
+                                if (logStatus == LocalLogStatus.SavedOffline) append(" · Sync pending")
                             },
                             color = if (logStatus == LocalLogStatus.Failed) {
                                 Color(0xFFFF6B6B)
@@ -531,7 +549,7 @@ private fun logLabel(status: LocalLogStatus): String = when (status) {
     LocalLogStatus.Idle -> ""
     LocalLogStatus.Saving -> "Saving…"
     LocalLogStatus.SavedOnline -> "Saved online"
-    LocalLogStatus.SavedOffline -> "Saved offline"
+    LocalLogStatus.SavedOffline -> "Saved locally"
     LocalLogStatus.Failed -> "Save failed"
 }
 

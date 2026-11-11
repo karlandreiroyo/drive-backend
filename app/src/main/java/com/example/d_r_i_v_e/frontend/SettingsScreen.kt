@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.sp
 
 @Composable
 fun SettingsScreen(
+    isHardwareConnected: Boolean = false,
     onLogoutClick: () -> Unit = {},
     onAccountProfileClick: () -> Unit = {},
     onCalibrateDeviceClick: () -> Unit = {},
@@ -46,7 +47,6 @@ fun SettingsScreen(
     onTabMapClick: () -> Unit = {},
     onTabSettingsClick: () -> Unit = {}
 ) {
-    var isHardwareConnected by remember { mutableStateOf(false) }
     var showLogoutDialog by remember { mutableStateOf(false) }
 
     Box(
@@ -114,7 +114,6 @@ fun SettingsScreen(
                             else
                                 Modifier
                         )
-                        .clickable { isHardwareConnected = !isHardwareConnected }
                         .padding(horizontal = 20.dp, vertical = 16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {

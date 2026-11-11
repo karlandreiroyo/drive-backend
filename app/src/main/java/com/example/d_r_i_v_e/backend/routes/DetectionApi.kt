@@ -10,13 +10,10 @@ import com.example.d_r_i_v_e.ml.DetectionResult
 import com.example.d_r_i_v_e.ml.DriverMonitorFrame
 import com.example.d_r_i_v_e.repository.DriveRepository
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 data class DetectionEvent(
@@ -52,11 +49,6 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
     // Latest per-frame metrics from the monitor; drives the Live Feed cards.
     private val _monitorFrame = MutableStateFlow<DriverMonitorFrame?>(null)
     val monitorFrame: StateFlow<DriverMonitorFrame?> = _monitorFrame.asStateFlow()
-
-    // Live status of the Raspberry Pi + ESP32 node, polled while a session runs.
-    private val _hardwareStatus = MutableStateFlow(HardwareStatus())
-    val hardwareStatus: StateFlow<HardwareStatus> = _hardwareStatus.asStateFlow()
-    private var hardwarePollJob: Job? = null
 
     private val _logStatus = MutableStateFlow(LocalLogStatus.Idle)
     val logStatus: StateFlow<LocalLogStatus> = _logStatus.asStateFlow()
@@ -103,7 +95,6 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
                 activeTrip = trip
                 _sessionStartedAt.value = trip.startTime
                 _sessionState.value = DrivingSessionState.Active
-                startHardwarePolling()
                 Log.d(TAG, "Session startup: trip ready, synced=${trip.isSynced}")
             } catch (e: CancellationException) {
                 throw e
@@ -132,22 +123,6 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             if (activeTrip?.id == trip.id) _monitorFrame.value = frame
         }
-    }
-
-    private fun startHardwarePolling() {
-        if (hardwarePollJob?.isActive == true) return
-        hardwarePollJob = viewModelScope.launch {
-            while (isActive) {
-                _hardwareStatus.value = DeviceApiClient.fetchStatus()
-                delay(2_500)
-            }
-        }
-    }
-
-    private fun stopHardwarePolling() {
-        hardwarePollJob?.cancel()
-        hardwarePollJob = null
-        _hardwareStatus.value = HardwareStatus()
     }
 
     fun onDetection(result: DetectionResult) {
@@ -184,7 +159,7 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
                 Log.e(TAG, "Couldn't save incident", e)
                 if (activeTrip?.id != trip.id) return@launch
                 _logStatus.value = LocalLogStatus.Failed
-                _statusMessage.value = "Couldn't save this incident."
+                _statusMessage.value = "Local save failed (${e.javaClass.simpleName}). Check Logcat: $TAG."
             }
         }
     }
@@ -204,7 +179,6 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         _monitorFrame.value = null
         _logStatus.value = LocalLogStatus.Idle
         _statusMessage.value = null
-        stopHardwarePolling()
 
         viewModelScope.launch {
             val saved = try {
@@ -251,7 +225,6 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         _monitorFrame.value = null
         _logStatus.value = LocalLogStatus.Idle
         _statusMessage.value = null
-        stopHardwarePolling()
         if (trip != null) {
             viewModelScope.launch {
                 try {

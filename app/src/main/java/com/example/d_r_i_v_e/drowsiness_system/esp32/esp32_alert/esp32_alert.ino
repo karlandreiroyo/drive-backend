@@ -1,26 +1,26 @@
 /*
- * ESP32 Drowsiness Alert Controller
- * ---------------------------------
- * Drives 6 vibration motors + 1 buzzer from commands sent by the Raspberry Pi.
+- ESP32 Drowsiness Alert Controller
+- ---------------------------------
+- Drives 6 vibration motors + 1 buzzer from commands sent by the Raspberry Pi/PC bridge.
  *
- * Hardware (logic signals only -- see README: use a transistor/MOSFET driver,
- * the GPIO pins must NOT power motors/buzzer directly):
- *   Motors : GPIO 4, 16, 17, 18, 19, 21
- *   Buzzer : GPIO 23
- *   Serial2: RX = GPIO 26 (<- Pi TX / GPIO14), TX = GPIO 27 (-> Pi RX / GPIO15)
- *   USB    : "Serial" is the USB port the Pi opens as /dev/ttyUSB0
+- Hardware (logic signals only -- see README: use a transistor/MOSFET driver,
+- the GPIO pins must NOT power motors/buzzer directly):
+-   Motors : GPIO 4, 16, 17, 18, 19, 21
+-   Buzzer : GPIO 23
+-   Serial2: RX = GPIO 26 (<- Pi TX / GPIO14), TX = GPIO 27 (-> Pi RX / GPIO15)
+-   USB    : "Serial" is the USB port the Pi opens as /dev/ttyUSB0
  *
- * Command protocol (newline-terminated ASCII, accepted on BOTH Serial & Serial2):
- *   Pi  -> ESP32 : "PING"          -> ESP32 replies "PONG" on the same port
- *                  "DROWSY_ALERT"  -> alert ON continuously (pulsing)
- *                  "CLEAR_ALERT"   -> alert OFF immediately
- *   ESP32 -> Pi  : "READY" | "ALERT_ON" | "ALERT_OFF" | "FAILSAFE_TIMEOUT" | "PONG"
+- Command protocol (newline-terminated ASCII, accepted on BOTH Serial & Serial2):
+-   Pi  -> ESP32 : "PING"          -> ESP32 replies "PONG" on the same port
+-                  "DROWSY_ALERT"  -> alert ON continuously (pulsing)
+-                  "CLEAR_ALERT"   -> alert OFF immediately
+-   ESP32 -> Pi  : "READY" | "ALERT_ON" | "ALERT_OFF" | "FAILSAFE_TIMEOUT" | "PONG"
  *
- * Behaviour:
- *   - Non-blocking: no delay() anywhere. Alert pulses 500 ms ON / 300 ms OFF.
- *   - Alert stays active until CLEAR_ALERT (latched), so it does not flicker.
- *   - Fail-safe: if no command/heartbeat arrives for 5 s while alerting, all
- *     outputs are turned off (protects against a crashed/unplugged Pi).
+- Behaviour:
+- Non-blocking: no delay() anywhere except a safe startup delay in setup(). Alert pulses 500 ms ON / 300 ms OFF.
+- Alert stays active until CLEAR_ALERT (latched), so it does not flicker.
+- Fail-safe: if no command/heartbeat arrives for 5 s while alerting, all
+-     outputs are turned off (protects against a crashed/unplugged Pi/PC).
  */
 
 // ---- Pin assignments (kept exactly as requested) ----
@@ -97,14 +97,17 @@ void handleCommand(const String &cmd, bool fromUsb) {
   lastCommandTime = millis();
 
   if (cmd == "PING") {
-    // Reply on the port the PING came from so the Pi sees it on its link.
+    // Reply on the port the PING came from so the bridge sees it on its link.
     if (fromUsb) {
+      Serial.print("\r\n");
       Serial.println("PONG");
+      Serial.flush();
     } else {
+      Serial2.print("\r\n");
       Serial2.println("PONG");
+      Serial2.flush();
     }
-    // The Pi flushes the ESP32 boot banner, so re-announce READY once on the
-    // first heartbeat. (Harmless duplicate of the setup() READY.)
+    // Re-announce READY once on the first heartbeat if needed.
     if (!readyAnnounced) {
       readyAnnounced = true;
       broadcast("READY");
@@ -139,8 +142,9 @@ void readPort(Stream &port, String &buffer, bool fromUsb) {
 }
 
 void setup() {
-  Serial.begin(115200);                              // USB (Pi /dev/ttyUSB0 + monitor)
-  Serial2.begin(115200, SERIAL_8N1, RX_PIN, TX_PIN);  // optional UART link to Pi
+  Serial.begin(115200);                              // USB Serial
+  delay(1000);                                       // Give USB Serial time to stabilize
+  Serial2.begin(115200, SERIAL_8N1, RX_PIN, TX_PIN);  // UART link
 
   pinMode(buzzerPin, OUTPUT);
   digitalWrite(buzzerPin, LOW);
@@ -159,9 +163,6 @@ void loop() {
   readPort(Serial, usbLine, true);
   readPort(Serial2, piLine, false);
 
-  // Capture 'now' AFTER reading so it is >= any timestamp set in handleCommand.
-  // (Capturing before would underflow the unsigned maths below and could trip
-  //  the fail-safe the instant a command arrives.)
   unsigned long now = millis();
 
   if (alertActive) {
@@ -173,7 +174,7 @@ void loop() {
       setOutputs(pulseOn);
     }
 
-    // Fail-safe: Pi went silent for 5 s while alerting -> everything off.
+    // Fail-safe: connection went silent for 5 s while alerting -> everything off.
     if (now - lastCommandTime >= FAILSAFE_TIMEOUT_MS) {
       failSafeStop();
     }

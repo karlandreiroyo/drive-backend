@@ -4,12 +4,15 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.d_r_i_v_e.backend.AuthSession
 import com.example.d_r_i_v_e.backend.AuthViewModel
 import com.example.d_r_i_v_e.backend.OtpViewModel
 import com.example.d_r_i_v_e.backend.OtpUiState
 import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
+import com.example.d_r_i_v_e.backend.routes.HardwareStatus
+import com.example.d_r_i_v_e.backend.routes.HardwareStatusViewModel
 import com.example.d_r_i_v_e.backend.routes.ReportViewModel
 import com.example.d_r_i_v_e.backend.routes.TripHistoryViewModel
 
@@ -72,7 +75,12 @@ fun AppNavigation() {
     }
 
     var isOnline by remember { mutableStateOf(false) }
-    var isHardwareConnected by remember { mutableStateOf(false) }
+    val hardwareStatus = if (currentScreen in mainTabScreens || currentScreen == "calibrateDevice") {
+        val hardwareViewModel: HardwareStatusViewModel = viewModel(key = "hardware-${AuthSession.user?.id}")
+        hardwareViewModel.status.collectAsStateWithLifecycle().value
+    } else {
+        HardwareStatus()
+    }
 
     // ===== Google sign-in + custom account chooser =====
     var selectedGoogleAccount by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -123,7 +131,6 @@ fun AppNavigation() {
         knownAccounts = emptyList()
         showAccountChooser = false
         isOnline = false
-        isHardwareConnected = false
     }
 
     // Restore the saved session before choosing the first screen, then react to
@@ -293,7 +300,7 @@ fun AppNavigation() {
         }
 
         "dashboard" -> DashboardScreen(
-            isHardwareConnected = isHardwareConnected,
+            isHardwareConnected = hardwareStatus.esp32Connected,
             isOnline = isOnline,
             welcomeName = welcomeName,
             onWelcomeDismissed = { welcomeName = null },
@@ -307,6 +314,7 @@ fun AppNavigation() {
         )
 
         "liveFeed" -> LiveFeedScreen(
+            hardwareStatus = hardwareStatus,
             onTabDashboardClick = { navigateTo("dashboard") },
             onTabCameraClick = { navigateTo("liveFeed") },
             onTabMapClick = { navigateTo("tripHistory") },
@@ -321,6 +329,7 @@ fun AppNavigation() {
         )
 
         "settings" -> SettingsScreen(
+            isHardwareConnected = hardwareStatus.esp32Connected,
             onLogoutClick = {
                 clearSession()
                 // Clear the whole stack so Back exits the app, never the
@@ -348,7 +357,7 @@ fun AppNavigation() {
         )
 
         "calibrateDevice" -> CalibrateDeviceScreen(
-            isHardwareConnected = isHardwareConnected,
+            isHardwareConnected = hardwareStatus.esp32Connected,
             onBackClick = { goBack() },
             onStartCalibrationClick = { },
             onTabDashboardClick = { navigateTo("dashboard") },

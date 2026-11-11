@@ -2,6 +2,7 @@ package com.example.d_r_i_v_e.repository
 
 import android.content.Context
 import android.util.Log
+import androidx.room.withTransaction
 import com.example.d_r_i_v_e.backend.AuthSession
 import com.example.d_r_i_v_e.backend.routes.HistoryOutcome
 import com.example.d_r_i_v_e.backend.routes.RemoteIncidentDto
@@ -18,6 +19,7 @@ import com.example.d_r_i_v_e.database.TripIncidentEntity
 import com.example.d_r_i_v_e.database.TripWithIncidents
 import com.example.d_r_i_v_e.sync.NetworkMonitor
 import com.example.d_r_i_v_e.sync.SyncScheduler
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -28,11 +30,18 @@ import java.util.Locale
 import java.util.TimeZone
 import java.util.UUID
 
-/** Remote-first driving writes; Room keeps the history cache and offline outbox. */
-class DriveRepository private constructor(context: Context) {
+/** Trip writes prefer the server; incidents are durable locally before upload. */
+class DriveRepository internal constructor(
+    context: Context,
+    private val database: DriveDatabase = DriveDatabase.getInstance(context.applicationContext),
+    private val upload: suspend (SyncRequestDto) -> SyncOutcome = { request ->
+        uploadForCurrentUser(context.applicationContext, request)
+    },
+    private val enqueueSync: () -> Unit = { SyncScheduler.enqueue(context.applicationContext) }
+) {
     private val appContext = context.applicationContext
-    private val tripDao = DriveDatabase.getInstance(appContext).tripDao()
-    private val incidentDao = DriveDatabase.getInstance(appContext).tripIncidentDao()
+    private val tripDao = database.tripDao()
+    private val incidentDao = database.tripIncidentDao()
     private val writeMutex = Mutex()
 
     fun observeHistory(userId: String): Flow<List<TripWithIncidents>> =
@@ -64,7 +73,7 @@ class DriveRepository private constructor(context: Context) {
         }
         val storedTrip = trip.copy(isSynced = acknowledged)
         tripDao.upsert(storedTrip)
-        if (!acknowledged) SyncScheduler.enqueue(appContext)
+        if (!acknowledged) enqueueSync()
         storedTrip
     }
 
@@ -74,7 +83,7 @@ class DriveRepository private constructor(context: Context) {
         confidence: Float,
         deviceTimestamp: Long = System.currentTimeMillis()
     ): TripIncidentEntity = writeMutex.withLock {
-        val boundedConfidence = confidence.coerceIn(0f, 1f)
+        val boundedConfidence = if (confidence.isFinite()) confidence.coerceIn(0f, 1f) else 0f
         val incident = TripIncidentEntity(
             id = UUID.randomUUID().toString(),
             tripId = trip.id,
@@ -86,38 +95,56 @@ class DriveRepository private constructor(context: Context) {
             deviceTimestamp = deviceTimestamp,
             createdAt = deviceTimestamp
         )
-        val currentTrip = tripDao.findById(trip.id) ?: trip
-        if (currentTrip.isDeleted) throw SyncWriteException("Cannot add an incident to a deleted trip.")
-        val parentNeedsSync = !currentTrip.isSynced
+        val currentTrip = database.withTransaction {
+            val localTrip = tripDao.findById(trip.id)
+            val parent = localTrip ?: trip.copy(isSynced = false)
+            if (parent.isDeleted) throw SyncWriteException("Cannot add an incident to a deleted trip.")
+            if (parent.userId != incident.userId) throw SyncWriteException("Incident and trip owners do not match.")
+            if (localTrip == null) tripDao.upsert(parent)
+            incidentDao.upsert(incident)
+            parent
+        }
+        Log.d(TAG, "Incident committed to local outbox")
+        try {
+            enqueueSync()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Incident saved locally, but scheduling sync failed", e)
+        }
 
+        val parentNeedsSync = !currentTrip.isSynced
         val request = SyncRequestDto(
             trips = if (parentNeedsSync) listOf(currentTrip.toSyncDto()) else emptyList(),
             incidents = listOf(incident.toSyncDto()),
             deleteTripIds = emptyList()
         )
-
-        when (val outcome = upload(request)) {
-            is SyncOutcome.Success -> {
-                val response = outcome.response
-                requireAck(response.incidentsSynced, incident.id, "incident")
-                if (parentNeedsSync) requireAck(response.tripsSynced, currentTrip.id, "trip")
-                cacheSyncedTrip(currentTrip)
-                val syncedIncident = incident.copy(
-                    isSynced = true,
-                    emailSent = incident.id in response.emailSentIds
-                )
-                incidentDao.upsert(syncedIncident)
-                syncedIncident
+        try {
+            val outcome = withTimeoutOrNull(INCIDENT_UPLOAD_TIMEOUT_MS) { upload(request) }
+            if (outcome !is SyncOutcome.Success) {
+                Log.w(TAG, "Incident saved locally; sync pending (${outcome?.javaClass?.simpleName ?: "timeout"})")
+                return@withLock incident
             }
-
-            is SyncOutcome.ConnectionFailed -> {
-                ensureLocalParent(currentTrip)
-                incidentDao.upsert(incident)
-                SyncScheduler.enqueue(appContext)
-                incident
+            val response = outcome.response
+            val parentAcknowledged = !parentNeedsSync || currentTrip.id in response.tripsSynced
+            val incidentAcknowledged = parentAcknowledged && incident.id in response.incidentsSynced
+            database.withTransaction {
+                if (parentNeedsSync && parentAcknowledged) tripDao.markSynced(listOf(currentTrip.id))
+                if (incidentAcknowledged) {
+                    incidentDao.markSynced(listOf(incident.id))
+                    if (incident.id in response.emailSentIds) incidentDao.markEmailSent(listOf(incident.id))
+                }
             }
-
-            else -> throw writeFailure(outcome)
+            if (!incidentAcknowledged) Log.w(TAG, "Incident saved locally; server acknowledgement missing")
+            incident.copy(
+                isSynced = incidentAcknowledged,
+                emailSent = incidentAcknowledged && incident.id in response.emailSentIds
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Incident remains saved locally; upload or acknowledgement failed", e)
+            incident
         }
     }
 
@@ -156,7 +183,7 @@ class DriveRepository private constructor(context: Context) {
                     destination = destination,
                     isSynced = false
                 )
-                SyncScheduler.enqueue(appContext)
+                enqueueSync()
                 true
             }
 
@@ -182,7 +209,7 @@ class DriveRepository private constructor(context: Context) {
             destination = trip.destination.ifBlank { "Destination" },
             isSynced = false
         )
-        SyncScheduler.enqueue(appContext)
+        enqueueSync()
     }
 
     /** Crash recovery marks the local session dirty so the constrained worker reconciles it. */
@@ -198,7 +225,7 @@ class DriveRepository private constructor(context: Context) {
                     destination = current.destination.ifBlank { "Destination" },
                     isSynced = false
                 )
-                SyncScheduler.enqueue(appContext)
+                enqueueSync()
             }
         }
     }
@@ -206,10 +233,10 @@ class DriveRepository private constructor(context: Context) {
     suspend fun deleteTrip(tripId: String) = writeMutex.withLock {
         if (tripDao.findById(tripId) == null) return@withLock
         tripDao.markDeleted(tripId)
-        SyncScheduler.enqueue(appContext)
+        enqueueSync()
     }
 
-    fun requestSync() = SyncScheduler.enqueue(appContext)
+    fun requestSync() = enqueueSync()
 
     /**
      * Pulls the user's remote history into the local cache on login/startup.
@@ -274,16 +301,6 @@ class DriveRepository private constructor(context: Context) {
         return@withLock lastOutcome
     }
 
-    private suspend fun upload(request: SyncRequestDto): SyncOutcome {
-        if (!NetworkMonitor.isOnline(appContext)) {
-            return SyncOutcome.ConnectionFailed("Device is offline.")
-        }
-        if (AuthSession.token.isNullOrBlank() || AuthSession.user?.id.isNullOrBlank()) {
-            return SyncOutcome.Unauthorized
-        }
-        return SyncApiClient.sync(request)
-    }
-
     private suspend fun applySyncResponse(response: SyncResponseDto) {
         if (response.tripsSynced.isNotEmpty()) tripDao.markSynced(response.tripsSynced)
         if (response.incidentsSynced.isNotEmpty()) incidentDao.markSynced(response.incidentsSynced)
@@ -317,18 +334,6 @@ class DriveRepository private constructor(context: Context) {
         }
     }
 
-    private suspend fun ensureLocalParent(trip: TripEntity) {
-        if (tripDao.findById(trip.id) == null) tripDao.upsert(trip)
-    }
-
-    private suspend fun cacheSyncedTrip(trip: TripEntity) {
-        if (tripDao.findById(trip.id) == null) {
-            tripDao.upsert(trip.copy(isSynced = true))
-        } else {
-            tripDao.markSynced(listOf(trip.id))
-        }
-    }
-
     private fun tripRequest(trip: TripEntity): SyncRequestDto = SyncRequestDto(
         trips = listOf(trip.toSyncDto()),
         incidents = emptyList(),
@@ -350,6 +355,7 @@ class DriveRepository private constructor(context: Context) {
     companion object {
         private const val TAG = "DriveRepository"
         private const val START_UPLOAD_TIMEOUT_MS = 5_000L
+        private const val INCIDENT_UPLOAD_TIMEOUT_MS = 5_000L
         private const val MAX_TRIPS = 100
         private const val MAX_INCIDENTS = 300
         private const val MAX_DELETES = 100
@@ -359,12 +365,23 @@ class DriveRepository private constructor(context: Context) {
 
         fun getInstance(context: Context): DriveRepository =
             instance ?: synchronized(this) {
-                instance ?: DriveRepository(context).also { instance = it }
+                instance ?: DriveRepository(context.applicationContext).also { instance = it }
             }
     }
 }
 
 class SyncWriteException(message: String) : Exception(message)
+
+private suspend fun uploadForCurrentUser(context: Context, request: SyncRequestDto): SyncOutcome {
+    if (!NetworkMonitor.isOnline(context)) return SyncOutcome.ConnectionFailed("Device is offline.")
+    val userId = AuthSession.user?.id
+    if (AuthSession.token.isNullOrBlank() || userId.isNullOrBlank() ||
+        request.trips.any { it.userId != userId } || request.incidents.any { it.userId != userId }
+    ) {
+        return SyncOutcome.Unauthorized
+    }
+    return SyncApiClient.sync(request)
+}
 
 private fun TripEntity.toSyncDto(): SyncTripDto = SyncTripDto(
     id = id,

@@ -31,13 +31,16 @@ class SerialLink:
         port,
         baud,
         *,
-        timeout=0.1,
+        timeout=0,
         write_timeout=0.5,
         reconnect_delay=2.0,
         boot_wait=2.0,
         ping_interval=1.0,
         pong_timeout=3.0,
         logger=None,
+        dtr=False,
+        rts=False,
+        reset_on_connect=False,
     ):
         self.port = port
         self.baud = baud
@@ -48,6 +51,11 @@ class SerialLink:
         self.ping_interval = ping_interval
         self.pong_timeout = pong_timeout
         self._log = logger or (lambda _msg: None)
+        self.dtr = dtr
+        self.rts = rts
+        self.reset_on_connect = reset_on_connect
+        self._sent_pings = 0
+        self._received_bytes = 0
 
         self._outbox = queue.Queue()   # commands waiting to be written
         self._inbox = queue.Queue()    # status lines waiting to be displayed
@@ -56,6 +64,7 @@ class SerialLink:
         self._thread = None
 
         self._connected = False
+        self._connection_generation = 0
         self._last_pong = 0.0          # monotonic timestamp of the last PONG
 
     # ------------------------------------------------------------------ #
@@ -91,12 +100,23 @@ class SerialLink:
             return self._connected
 
     @property
-    def handshake_ok(self):
-        """True when the port is open AND a PONG arrived recently."""
+    def connection_generation(self):
+        """Changes on port transitions, including reconnects between polls."""
         with self._lock:
-            if not self._connected:
+            return self._connection_generation
+
+    @property
+    def handshake_ok(self):
+        """True when the port is open AND a nonzero, fresh PONG was received."""
+        with self._lock:
+            if not self._connected or not self._last_pong:
                 return False
             return (time.monotonic() - self._last_pong) <= self.pong_timeout
+
+    @property
+    def diagnostics(self):
+        with self._lock:
+            return f"PINGs sent={self._sent_pings}, bytes received={self._received_bytes}"
 
     def stop(self):
         """Signal the worker to close the port and exit, then wait for it."""
@@ -110,8 +130,8 @@ class SerialLink:
     # ------------------------------------------------------------------ #
     def _run(self):
         ser = None
-        last_attempt = 0.0
-        last_ping = 0.0
+        last_attempt = float("-inf")
+        last_ping = float("-inf")
         buffer = ""
 
         while not self._stop.is_set():
@@ -124,9 +144,9 @@ class SerialLink:
                     ser = self._open_port()
                     if ser is not None:
                         self._set_connected(True)
-                        last_ping = 0.0      # send a PING immediately
+                        last_ping = float("-inf")
                         buffer = ""
-                        self._log(f"Serial port opened: {self.port}")
+                        self._log(f"Serial port opened: {self.port} (8N1, DTR={self.dtr}, RTS={self.rts}, flow control off)")
                 if ser is None:
                     self._stop.wait(0.1)
                     continue
@@ -146,10 +166,11 @@ class SerialLink:
                     last_ping = now
                     self._write(ser, "PING")
 
-                # 3) Read whatever has arrived (non-blocking) and split lines.
-                waiting = ser.in_waiting
-                if waiting:
-                    buffer += ser.read(waiting).decode("utf-8", errors="replace")
+                # 3) Read whatever has arrived (non-blocking via timeout=0) and split lines.
+                # Avoid relying solely on ser.in_waiting which can return 0 on Windows COM ports (CH340/CP210x).
+                data = ser.read(4096)
+                if data:
+                    buffer += data.decode("utf-8", errors="replace")
                     while "\n" in buffer:
                         line, buffer = buffer.split("\n", 1)
                         line = line.strip()
@@ -175,43 +196,75 @@ class SerialLink:
         self._set_connected(False)
 
     def _open_port(self):
+        ser = None
         try:
             ser = serial.Serial(
-                self.port,
-                self.baud,
+                port=None,
+                baudrate=self.baud,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
                 timeout=self.timeout,
                 write_timeout=self.write_timeout,
+                xonxoff=False,
+                rtscts=False,
+                dsrdtr=False,
             )
-        except (serial.SerialException, OSError) as exc:
-            self._log(f"Could not open {self.port}: {exc}")
-            return None
-
-        # Opening the port toggles DTR/RTS and resets most ESP32 dev boards.
-        # Wait for the sketch to boot, then discard its boot banner/noise so the
-        # first line we parse is a clean response to our PING.
-        self._stop.wait(self.boot_wait)
-        try:
+            # Set control lines before open so default assertions cannot hold reset/boot pins.
+            ser.dtr = self.dtr
+            ser.rts = self.rts
+            ser.port = self.port
+            ser.open()
+            if self.reset_on_connect:
+                # Pulse RTS/DTR to reset ESP32 board into flash boot mode
+                ser.rts = True
+                ser.dtr = True
+                time.sleep(0.1)
+                ser.rts = self.rts
+                ser.dtr = self.dtr
+                time.sleep(0.1)
             ser.reset_input_buffer()
             ser.reset_output_buffer()
-        except (serial.SerialException, OSError):
-            pass
-        return ser
+            if self._stop.wait(self.boot_wait):
+                self._close(ser)
+                return None
+            return ser
+        except (serial.SerialException, OSError) as exc:
+            self._close(ser)
+            self._log(f"Could not open {self.port}: {exc}")
+            self._log(
+                "If the port is busy or access is denied, close Arduino Serial "
+                "Monitor/Plotter and any other program using this port."
+            )
+            return None
 
     def _write(self, ser, command):
-        ser.write((command + "\n").encode("utf-8"))
-        ser.flush()
+        data = (command + "\n").encode("utf-8")
+        if ser.write(data) != len(data):
+            raise serial.SerialException("Incomplete serial write")
 
     def _handle_line(self, line):
         if line == "PONG":
+            now = time.monotonic()
             with self._lock:
-                self._last_pong = time.monotonic()
+                first_pong = not self._last_pong or now - self._last_pong > self.pong_timeout
+                self._last_pong = now
+            if first_pong:
+                self._log("ESP32 PONG received")
         else:
-            # READY / ALERT_ON / ALERT_OFF / FAILSAFE_TIMEOUT / anything else.
+            if line == "READY":
+                self._log("ESP32 READY received")
             self._inbox.put(line)
 
     def _set_connected(self, value):
         with self._lock:
+            if self._connected != value:
+                self._connection_generation += 1
             self._connected = value
+            if not value:
+                # A reopened port must earn its own handshake and acknowledgements.
+                self._last_pong = 0.0
+                self.update()
 
     @staticmethod
     def _close(ser):
