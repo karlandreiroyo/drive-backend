@@ -19,8 +19,8 @@ data class DriverMonitorFrame(
 )
 
 /**
-- What one analyzed frame produced: current metrics plus at most one
-- threshold-crossing event.
+ * What one analyzed frame produced: current metrics plus at most one
+ * threshold-crossing event.
  */
 data class MonitorUpdate(
     val frame: DriverMonitorFrame? = null,
@@ -110,7 +110,7 @@ class HeuristicDriverMonitor(
         val eyeClosureRatio = if (windowCount == 0) 0f else windowClosed / windowCount.toFloat()
         val windowSpanMs = now - oldestInWindow
 
-        // Drowsy trigger sa 20% threshold
+        // Drowsy trigger sa 20% threshold (0.20f)
         val drowsy = stillForMs >= DROWSY_STILL_MS ||
                 (eyeClosureRatio >= 0.20f && windowSpanMs >= DROWSY_STILL_MS)
 
@@ -226,14 +226,14 @@ class HeuristicDriverMonitor(
         const val BLINK_MIN_MOTION = 0.03f
         const val CLOSED_MOTION = 0.020f
 
-        // 5 segundo para mapilitang magising ang driver (tagal ng pagka-detect/alert)
+        // 5 segundo na detection hold bago mag-trigger
         const val DROWSY_STILL_MS = 5_000L
         const val CLOSURE_WINDOW_MS = 1_500L
 
         const val MOTION_EVENT_THRESHOLD = 0.10f
         const val MOTION_EVENT_COOLDOWN_MS = 5_000L
 
-        // 3 segundo na cooldown bago mag-detect uli
+        // 3 segundo na cooldown bago muling mag-detect
         const val DROWSY_EVENT_COOLDOWN_MS = 3_000L
 
         const val DOWN_BAND = 0.60f

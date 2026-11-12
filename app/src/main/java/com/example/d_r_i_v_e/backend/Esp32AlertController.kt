@@ -13,22 +13,6 @@ import okhttp3.Request
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * State machine that drives ESP32 alert/clear cycles.
- *
- *   IDLE      - no active alert; waiting for sustained drowsiness
- *   ALERTING  - /alert succeeded; waiting for sustained wakefulness to send /clear
- *
- *   IDLE + drowsy >= 1000 ms     -> GET /alert -> ALERTING
- *   ALERTING + awake >= 2000 ms  -> GET /clear -> IDLE
- *
- * Usage (in LiveFeedScreen):
- *   val context = LocalContext.current
- *   val alertController = remember { Esp32AlertController { Esp32Service.getBaseUrl(context) } }
- *
- * Call [onReading] on EVERY detection result (drowsy or not).
- * Call [forceStop] when the session stops or the composable is disposed.
- */
 class Esp32AlertController(
     private val baseUrlProvider: () -> String
 ) {
@@ -37,13 +21,14 @@ class Esp32AlertController(
 
     private val TAG = "Esp32AlertController"
 
-    // Timing thresholds
-    private val DROWSY_THRESHOLD_MS = 1_000L
-    private val AWAKE_THRESHOLD_MS = 2_000L
+    // Timing thresholds: 500ms trigger kapag drowsy na ang frame (dahil may 5s hold na sa Monitor),
+    // at 5 seconds na tuloy-tuloy na alert bago mag-clear kapag gising na ang driver.
+    private val DROWSY_THRESHOLD_MS = 500L
+    private val AWAKE_THRESHOLD_MS = 5_000L
 
-    // Network tuning (worst case ~1.6 s when ESP32 is unreachable)
-    private val REQUEST_TIMEOUT_MS = 800L
-    private val MAX_RETRIES = 2
+    // Network tuning
+    private val REQUEST_TIMEOUT_MS = 2_000L
+    private val MAX_RETRIES = 3
 
     @Volatile private var state = AlertState.IDLE
     @Volatile private var drowsyStartMs = -1L
@@ -52,7 +37,6 @@ class Esp32AlertController(
     private val alertInFlight = AtomicBoolean(false)
     private val clearInFlight = AtomicBoolean(false)
 
-    /** True only after a successful /alert. */
     private val _alertActive = MutableStateFlow(false)
     val alertActive: StateFlow<Boolean> = _alertActive
 
@@ -66,9 +50,6 @@ class Esp32AlertController(
             .build()
     }
 
-    // ── Public API ───────────────────────────────────────────────────────────
-
-    /** Call on EVERY frame/reading while a driving session is active. */
     fun onReading(isDrowsy: Boolean, scope: CoroutineScope) {
         val now = System.currentTimeMillis()
         when (state) {
@@ -100,7 +81,6 @@ class Esp32AlertController(
         }
     }
 
-    /** Best-effort /clear and state reset. Call when the session stops or the screen is disposed. */
     fun forceStop(scope: CoroutineScope) {
         Log.i(TAG, "forceStop() - sending /clear and resetting state")
         drowsyStartMs = -1L
@@ -111,7 +91,6 @@ class Esp32AlertController(
         state = AlertState.IDLE
     }
 
-    /** Hard reset without any network call. */
     fun reset() {
         Log.i(TAG, "reset() - clearing state without network call")
         state = AlertState.IDLE
@@ -119,8 +98,6 @@ class Esp32AlertController(
         awakeStartMs = -1L
         _alertActive.value = false
     }
-
-    // ── Internal helpers ─────────────────────────────────────────────────────
 
     private suspend fun tryAlert() {
         try {
@@ -157,7 +134,6 @@ class Esp32AlertController(
         }
     }
 
-    /** GET [url] with retries. Returns true on first HTTP 2xx. Logs every attempt. */
     private suspend fun sendWithRetry(url: String): Boolean =
         withContext(Dispatchers.IO) {
             repeat(MAX_RETRIES) { attempt ->
