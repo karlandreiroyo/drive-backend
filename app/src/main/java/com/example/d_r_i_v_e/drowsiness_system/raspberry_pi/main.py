@@ -2,8 +2,17 @@
 
 Pipeline:
     Picamera2 (CSI IR-CUT, 640x480) -> YOLO classification (best.pt)
-        -> hysteresis debounce -> DROWSY_ALERT / CLEAR_ALERT over USB serial
+        -> hysteresis debounce -> (optional) DROWSY_ALERT / CLEAR_ALERT over USB serial
         -> ESP32 drives buzzer + 6 vibration motors.
+
+Who controls the ESP32 buzzer/motors?
+    The mobile app now drives the ESP32 over Wi-Fi (GET /alert, GET /clear).
+    To avoid the Pi and the app switching each other off, the Pi's serial
+    alert commands are DISABLED by default. The Pi still runs detection,
+    keeps the PING/PONG heartbeat, and reports status to the backend.
+    To let the Pi drive the hardware again, set in config.py:
+        PI_SENDS_ALERTS = True
+    (and then stop the app from calling /alert and /clear).
 
 Detection keeps running even if the ESP32 is unplugged; the serial link
 auto-reconnects in the background (see serial_link.py). Press Q in the video
@@ -20,6 +29,9 @@ from ultralytics import YOLO
 import config
 from backend_link import BackendLink
 from serial_link import SerialLink
+
+# False (default): the app owns the ESP32 alert. True: the Pi sends DROWSY_ALERT / CLEAR_ALERT.
+PI_SENDS_ALERTS = bool(getattr(config, "PI_SENDS_ALERTS", False))
 
 
 def draw_line(frame, text, row, color):
@@ -39,6 +51,11 @@ def main():
     try:
         # --- Serial link (background thread, auto-reconnect, PING/PONG) ---
         print(f"Starting serial link to ESP32 on {config.SERIAL_PORT} @ {config.SERIAL_BAUD}...")
+        print(
+            "Pi serial alerts: "
+            + ("ENABLED (Pi controls buzzer/motors)" if PI_SENDS_ALERTS
+               else "DISABLED (the mobile app controls buzzer/motors over Wi-Fi)")
+        )
         link = SerialLink(
             config.SERIAL_PORT,
             config.SERIAL_BAUD,
@@ -128,12 +145,18 @@ def main():
 
             if not alert_active and drowsy_streak >= config.DROWSY_FRAME_COUNT:
                 alert_active = True
-                link.send("DROWSY_ALERT")
-                print("--> Sent: DROWSY_ALERT")
+                if PI_SENDS_ALERTS:
+                    link.send("DROWSY_ALERT")
+                    print("--> Sent: DROWSY_ALERT")
+                else:
+                    print("--> Drowsy detected (Pi serial alert disabled; app controls the ESP32)")
             elif alert_active and clear_streak >= config.CLEAR_FRAME_COUNT:
                 alert_active = False
-                link.send("CLEAR_ALERT")
-                print("--> Sent: CLEAR_ALERT")
+                if PI_SENDS_ALERTS:
+                    link.send("CLEAR_ALERT")
+                    print("--> Sent: CLEAR_ALERT")
+                else:
+                    print("--> Driver recovered (Pi serial alert disabled; app controls the ESP32)")
 
             # --- Drain ESP32 status messages (READY / ALERT_ON / ALERT_OFF) ---
             for message in link.update():
@@ -150,11 +173,13 @@ def main():
             else:
                 last_warn = 0.0
 
-            # Re-assert the alert whenever the handshake comes back up. Opening
-            # the port resets most ESP32 boards (DTR/RTS), wiping the latched
-            # alert; without this, a reconnect mid-drowsiness would leave the
-            # driver with no buzzer/motors even though alert_active is still True.
-            if connected and not prev_handshake:
+            # Re-assert the alert whenever the handshake comes back up (only when the
+            # Pi owns the alert). Opening the port resets most ESP32 boards (DTR/RTS),
+            # wiping the latched alert; without this, a reconnect mid-drowsiness would
+            # leave the driver with no buzzer/motors even though alert_active is True.
+            # When the app owns the alert we must NOT send CLEAR_ALERT here, or we
+            # would switch off an alert the app just started.
+            if PI_SENDS_ALERTS and connected and not prev_handshake:
                 link.send("DROWSY_ALERT" if alert_active else "CLEAR_ALERT")
             prev_handshake = connected
 
@@ -166,7 +191,8 @@ def main():
             draw_line(frame_bgr, f"Status: {class_name} ({confidence:.2f})", 0, state_color)
             draw_line(
                 frame_bgr,
-                f"Alert: {'ON' if alert_active else 'OFF'}  "
+                f"Alert: {'ON' if alert_active else 'OFF'}"
+                f"{'' if PI_SENDS_ALERTS else ' [app-controlled]'}  "
                 f"(drowsy {drowsy_streak}/{config.DROWSY_FRAME_COUNT})",
                 1, (0, 0, 255) if alert_active else (0, 255, 0),
             )
@@ -191,14 +217,16 @@ def main():
     except Exception as exc:  # noqa: BLE001 - top-level guard so resources always release
         print(f"ERROR: {exc}")
     finally:
-        # Best-effort: tell the ESP32 to stop, give the worker a moment to flush,
-        # then close everything. If the ESP32 is gone its 5s fail-safe covers us.
+        # Best-effort: if the Pi owns the alert, tell the ESP32 to stop and give the
+        # worker a moment to flush. If the app owns it, send nothing (a CLEAR_ALERT
+        # here could switch off an alert the app started). Then close everything.
         if link is not None:
-            try:
-                link.send("CLEAR_ALERT")
-                time.sleep(0.2)
-            except Exception:  # noqa: BLE001
-                pass
+            if PI_SENDS_ALERTS:
+                try:
+                    link.send("CLEAR_ALERT")
+                    time.sleep(0.2)
+                except Exception:  # noqa: BLE001
+                    pass
             link.stop()
         if backend is not None:
             backend.stop()

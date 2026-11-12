@@ -12,10 +12,15 @@ Design notes
 * "connected" means the OS port is open; "handshake_ok" means the ESP32 is
   actually answering. The video overlay uses handshake_ok, so a port that is
   open but silent still reads as DISCONNECTED.
+* Commands queued while the port was closed are discarded on reconnect, so a
+  stale DROWSY_ALERT / CLEAR_ALERT backlog is never replayed. main.py
+  re-asserts the current state after the handshake comes back.
 
 The wire protocol is newline-terminated ASCII:
     Pi -> ESP32 : PING | DROWSY_ALERT | CLEAR_ALERT
     ESP32 -> Pi : PONG | READY | ALERT_ON | ALERT_OFF | FAILSAFE_TIMEOUT
+The ESP32 may also print free-text lines (Wi-Fi status, IP address). They are
+passed through update() like any other status line and can be ignored.
 """
 
 import queue
@@ -144,6 +149,9 @@ class SerialLink:
                     ser = self._open_port()
                     if ser is not None:
                         self._set_connected(True)
+                        # Drop commands queued while we were offline (or during the
+                        # boot wait): replaying them would apply stale alert states.
+                        self._drain_outbox()
                         last_ping = float("-inf")
                         buffer = ""
                         self._log(f"Serial port opened: {self.port} (8N1, DTR={self.dtr}, RTS={self.rts}, flow control off)")
@@ -165,11 +173,15 @@ class SerialLink:
                 if now - last_ping >= self.ping_interval:
                     last_ping = now
                     self._write(ser, "PING")
+                    with self._lock:
+                        self._sent_pings += 1
 
                 # 3) Read whatever has arrived (non-blocking via timeout=0) and split lines.
                 # Avoid relying solely on ser.in_waiting which can return 0 on Windows COM ports (CH340/CP210x).
                 data = ser.read(4096)
                 if data:
+                    with self._lock:
+                        self._received_bytes += len(data)
                     buffer += data.decode("utf-8", errors="replace")
                     while "\n" in buffer:
                         line, buffer = buffer.split("\n", 1)
@@ -237,6 +249,14 @@ class SerialLink:
                 "Monitor/Plotter and any other program using this port."
             )
             return None
+
+    def _drain_outbox(self):
+        """Discard queued commands that were never written."""
+        while True:
+            try:
+                self._outbox.get_nowait()
+            except queue.Empty:
+                break
 
     def _write(self, ser, command):
         data = (command + "\n").encode("utf-8")

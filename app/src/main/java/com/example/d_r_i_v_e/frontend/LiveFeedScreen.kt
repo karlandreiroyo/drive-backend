@@ -47,25 +47,26 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.Observer
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.d_r_i_v_e.alerts.rememberLocalAlertManager
+import com.example.d_r_i_v_e.backend.Esp32AlertController
 import com.example.d_r_i_v_e.backend.Esp32Service
 import com.example.d_r_i_v_e.backend.routes.DetectionEvent
 import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
 import com.example.d_r_i_v_e.backend.routes.DrivingSessionState
-import com.example.d_r_i_v_e.backend.routes.HardwareConnection
 import com.example.d_r_i_v_e.backend.routes.HardwareStatus
 import com.example.d_r_i_v_e.backend.routes.LocalLogStatus
 import com.example.d_r_i_v_e.ml.DetectionAnalyzer
 import com.example.d_r_i_v_e.ml.DetectionResult
 import com.example.d_r_i_v_e.ml.DriverMonitorFrame
 import com.example.d_r_i_v_e.ml.HeuristicDriverMonitor
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -86,7 +87,7 @@ fun LiveFeedScreen(
     val sessionStartedAt by detectionViewModel.sessionStartedAt.collectAsState()
     val isDrivingActive = sessionState == DrivingSessionState.Active
     val isSessionBusy = sessionState == DrivingSessionState.Starting ||
-        sessionState == DrivingSessionState.Stopping
+            sessionState == DrivingSessionState.Stopping
     val detectionCount by detectionViewModel.sessionDetectionCount.collectAsState()
     val lastEvent by detectionViewModel.lastEvent.collectAsState()
     val logStatus by detectionViewModel.logStatus.collectAsState()
@@ -98,6 +99,12 @@ fun LiveFeedScreen(
     var alertEvent by remember { mutableStateOf<DetectionEvent?>(null) }
 
     val localAlertManager = rememberLocalAlertManager()
+
+    // ── ESP32 alert state machine (the ONLY place that calls /alert and /clear) ──
+    val alertController = remember { Esp32AlertController { Esp32Service.getBaseUrl(context) } }
+    // Own scope so a final /clear still runs when this screen leaves composition.
+    val alertScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
+    val isEsp32AlertActive by alertController.alertActive.collectAsState()
 
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -151,56 +158,42 @@ fun LiveFeedScreen(
         }
     }
 
-    val coroutineScope = rememberCoroutineScope()
-    var isEsp32AlertActive by remember { mutableStateOf(false) }
-
-    // Task 3: Call /alert when drowsiness is detected and /clear when the driver recovers; handle errors without crashing
-    LaunchedEffect(monitorFrame?.drowsy, isDrivingActive) {
-        if (!isDrivingActive) {
-            if (isEsp32AlertActive) {
-                isEsp32AlertActive = false
-                coroutineScope.launch { Esp32Service.sendClear() }
-            }
-            return@LaunchedEffect
-        }
-
-        val isDrowsy = monitorFrame?.drowsy == true
-        if (isDrowsy && !isEsp32AlertActive) {
-            isEsp32AlertActive = true
-            coroutineScope.launch { Esp32Service.sendAlert() }
-        } else if (!isDrowsy && isEsp32AlertActive) {
-            isEsp32AlertActive = false
-            coroutineScope.launch { Esp32Service.sendClear() }
+    // Session start: clean state (no network). Session end: turn hardware off if it is on.
+    LaunchedEffect(isDrivingActive) {
+        if (isDrivingActive) {
+            alertController.reset()
+        } else if (alertController.alertActive.value) {
+            alertController.forceStop(alertScope)
         }
     }
 
+    // Leaving the screen: make sure the buzzer/motors are not left running.
     DisposableEffect(Unit) {
         onDispose {
-            if (isEsp32AlertActive) {
-                isEsp32AlertActive = false
-                coroutineScope.launch { Esp32Service.sendClear() }
+            if (alertController.alertActive.value) {
+                alertController.forceStop(alertScope)
             }
         }
     }
 
-    // Task 3 & 5: Decoupled detection callback. Local incident saving runs independently of ESP32 connection/alerting.
+    // Local tone/speech + incident saving. This does NOT touch the ESP32.
     val onFrameDetection: (DetectionResult) -> Unit = { result ->
         if (detectionViewModel.sessionState.value == DrivingSessionState.Active) {
-            // 1. Play local audible alert tone and TTS warning safely
             runCatching {
                 localAlertManager.triggerDetectionAlert(result.label, result.confidence)
             }.onFailure { Log.w("LiveFeedScreen", "Local audio alert failed: ${it.message}") }
 
-            // 2. Trigger ESP32 alert if label indicates drowsiness
-            if (result.label.contains("drows", ignoreCase = true)) {
-                if (!isEsp32AlertActive) {
-                    isEsp32AlertActive = true
-                    coroutineScope.launch { Esp32Service.sendAlert() }
-                }
-            }
-
-            // 3. Separately and independently save the incident to Room/Sync
+            // Independent of the ESP32 call
             detectionViewModel.onDetection(result)
+        }
+    }
+
+    // Called on EVERY analyzed frame (drowsy or not) so the controller can time
+    // "drowsy >= 1 s" -> /alert and "awake >= 2 s" -> /clear, over and over.
+    val onMonitorFrame: (DriverMonitorFrame) -> Unit = { frame ->
+        detectionViewModel.onMonitorFrame(frame)
+        if (detectionViewModel.sessionState.value == DrivingSessionState.Active) {
+            alertController.onReading(frame.drowsy, alertScope)
         }
     }
 
@@ -219,7 +212,7 @@ fun LiveFeedScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
             ) {
                 // Main Container Card
                 Column(
@@ -227,9 +220,9 @@ fun LiveFeedScreen(
                         .fillMaxSize()
                         .clip(RoundedCornerShape(20.dp))
                         .background(Color(0xFF141414))
-                        .padding(16.dp)
+                        .padding(10.dp)
                 ) {
-                    // Header Row
+                    // Header Row (compact)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -238,7 +231,7 @@ fun LiveFeedScreen(
                         Text(
                             text = "Live Feed",
                             color = Color.White,
-                            fontSize = 20.sp,
+                            fontSize = 18.sp,
                             fontWeight = FontWeight.Bold
                         )
 
@@ -246,13 +239,13 @@ fun LiveFeedScreen(
                             imageVector = Icons.Filled.Notifications,
                             contentDescription = "Notification",
                             tint = Color.White,
-                            modifier = Modifier.size(24.dp)
+                            modifier = Modifier.size(22.dp)
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                    // Camera preview takes all remaining vertical space
+                    // Camera preview: takes ALL remaining vertical space.
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -263,7 +256,7 @@ fun LiveFeedScreen(
                     ) {
                         if (isDrivingActive && hasCameraPermission) {
                             CameraPreview(
-                                onFrame = { frame -> detectionViewModel.onMonitorFrame(frame) },
+                                onFrame = onMonitorFrame,
                                 onEvent = onFrameDetection,
                                 onError = detectionViewModel::onCameraError,
                                 modifier = Modifier.fillMaxSize()
@@ -271,7 +264,7 @@ fun LiveFeedScreen(
                             LiveBadge(
                                 modifier = Modifier
                                     .align(Alignment.TopStart)
-                                    .padding(12.dp)
+                                    .padding(10.dp)
                             )
                         } else {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -292,17 +285,85 @@ fun LiveFeedScreen(
                                 }
                             }
                         }
+
+                        // ESP32 status chip over the video (top-right)
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(10.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xCC000000))
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (hardwareStatus.esp32Connected) Color(0xFF4CD964)
+                                        else Color(0xFFFF6B6B)
+                                    )
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (hardwareStatus.esp32Connected) "ESP32: CONNECTED" else "ESP32: DISCONNECTED",
+                                color = if (hardwareStatus.esp32Connected) Color(0xFF4CD964)
+                                else Color(0xFFFF6B6B),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+
+                        // Metrics overlaid on the video (bottom)
+                        val metrics = monitorFrame
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                                .padding(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            MetricChip(
+                                label = "Blink",
+                                value = metrics?.blinkRatePerMinute?.let { "$it bpm" }
+                                    ?: if (isDrivingActive) "Calibrating…" else "--",
+                                modifier = Modifier.weight(1f)
+                            )
+                            MetricChip(
+                                label = "Eyes",
+                                value = when {
+                                    metrics == null -> if (isDrivingActive) "Calibrating…" else "--"
+                                    metrics.drowsy -> "Drowsy"
+                                    else -> "Alert"
+                                },
+                                sub = metrics?.let { "${(it.drowsinessConfidence * 100).toInt()}%" },
+                                valueColor = when {
+                                    metrics?.drowsy == true -> Color(0xFFFF6B6B)
+                                    metrics != null -> Color(0xFF4CD964)
+                                    else -> Color.White
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                            MetricChip(
+                                label = "Head",
+                                value = metrics?.headPoseLabel
+                                    ?: if (isDrivingActive) "Calibrating…" else "--",
+                                sub = metrics?.let { "${(it.headPoseConfidence * 100).toInt()}%" },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                    // Status Message Card
+                    // Status Message Card (compact)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
                             .background(Color(0xFF4A4A4C))
-                            .padding(vertical = 12.dp, horizontal = 16.dp),
+                            .padding(vertical = 8.dp, horizontal = 16.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
@@ -323,49 +384,24 @@ fun LiveFeedScreen(
                                 isDrivingActive -> Color(0xFF4CD964)
                                 else -> Color.White.copy(alpha = 0.7f)
                             },
-                            fontSize = 14.sp,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Medium
                         )
                     }
 
-                    // Hardware node link (ESP32), polled live every 3s.
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    if (hardwareStatus.esp32Connected) Color(0xFF4CD964)
-                                    else Color(0xFFFF6B6B)
-                                )
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (hardwareStatus.esp32Connected) "ESP32: CONNECTED" else "ESP32: DISCONNECTED",
-                            color = if (hardwareStatus.esp32Connected) Color(0xFF4CD964)
-                            else Color(0xFFFF6B6B),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        if (hardwareStatus.alertActive || isEsp32AlertActive) {
-                            Text(
-                                text = " · Drowsy alert active",
-                                color = Color(0xFFFF6B6B),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
+                    // Hardware details line (only when there is something to say)
+                    val hardwareNote = when {
+                        !hardwareStatus.esp32Connected && hardwareStatus.message != null ->
+                            hardwareStatus.message
+                        hardwareStatus.alertActive || isEsp32AlertActive ->
+                            "Drowsy alert active (buzzer + vibration)"
+                        else -> null
                     }
-
-                    if (!hardwareStatus.esp32Connected && hardwareStatus.message != null) {
+                    if (hardwareNote != null) {
                         Text(
-                            text = hardwareStatus.message,
-                            color = Color.White.copy(alpha = 0.6f),
+                            text = hardwareNote,
+                            color = if (hardwareStatus.esp32Connected) Color(0xFFFF6B6B)
+                            else Color.White.copy(alpha = 0.6f),
                             fontSize = 11.sp,
                             modifier = Modifier
                                 .padding(top = 4.dp)
@@ -375,7 +411,7 @@ fun LiveFeedScreen(
 
                     // Sync summary
                     if (isDrivingActive && detectionCount > 0) {
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = buildString {
                                 append(detectionCount)
@@ -394,55 +430,14 @@ fun LiveFeedScreen(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Metrics Row — values come from the per-frame monitor.
-                    val metrics = monitorFrame
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        MetricCard(
-                            label = "Blink Rate:",
-                            value = metrics?.blinkRatePerMinute?.let { "$it bpm" }
-                                ?: if (isDrivingActive) "Calibrating…" else "--",
-                            modifier = Modifier.weight(1f)
-                        )
-                        MetricCard(
-                            label = "Eye Closure:",
-                            value = when {
-                                metrics == null -> if (isDrivingActive) "Calibrating…" else "--"
-                                metrics.drowsy -> "Drowsy"
-                                else -> "Alert"
-                            },
-                            sub = metrics?.let { "${(it.drowsinessConfidence * 100).toInt()}% confidence" },
-                            valueColor = when {
-                                metrics?.drowsy == true -> Color(0xFFFF6B6B)
-                                metrics != null -> Color(0xFF4CD964)
-                                else -> Color.White
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
-                        MetricCard(
-                            label = "Head Pose:",
-                            value = metrics?.headPoseLabel
-                                ?: if (isDrivingActive) "Calibrating…" else "--",
-                            sub = metrics?.let { "${(it.headPoseConfidence * 100).toInt()}% confident" },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(20.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     // Action Button (Start / Stop Driving Session)
                     Button(
                         onClick = {
                             if (isDrivingActive) {
                                 showAlert = false
-                                if (isEsp32AlertActive) {
-                                    isEsp32AlertActive = false
-                                    coroutineScope.launch { Esp32Service.sendClear() }
-                                }
+                                alertController.forceStop(alertScope)
                                 detectionViewModel.finishSession { message ->
                                     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                                 }
@@ -462,7 +457,7 @@ fun LiveFeedScreen(
                         enabled = !isSessionBusy && !permissionRequestInFlight,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(50.dp),
+                            .height(48.dp),
                         shape = RoundedCornerShape(25.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (isDrivingActive) Color(0xFFD32F2F) else Color(0xFF0F0B94)
@@ -491,7 +486,7 @@ fun LiveFeedScreen(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
 
                     Text(
                         text = if (isDrivingActive) {
@@ -644,7 +639,7 @@ private fun CameraPreview(
                 if (!disposed.get()) {
                     try {
                         check(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-                            PackageManager.PERMISSION_GRANTED) { "Camera permission is not granted" }
+                                PackageManager.PERMISSION_GRANTED) { "Camera permission is not granted" }
                         val cameraProvider = future.get()
                         provider = cameraProvider
                         val cameraSelector = when {
@@ -731,8 +726,9 @@ private fun formatTripDuration(totalSeconds: Long): String {
     }
 }
 
+/** Compact translucent metric shown on top of the video. */
 @Composable
-private fun MetricCard(
+private fun MetricChip(
     label: String,
     value: String,
     modifier: Modifier = Modifier,
@@ -741,35 +737,25 @@ private fun MetricCard(
 ) {
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFF4A4A4C))
-            .padding(vertical = 10.dp, horizontal = 8.dp),
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xB3000000))
+            .padding(vertical = 6.dp, horizontal = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
             text = label,
             color = Color.White.copy(alpha = 0.6f),
-            fontSize = 11.sp,
+            fontSize = 10.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        Spacer(modifier = Modifier.height(4.dp))
         Text(
-            text = value,
+            text = if (sub != null) "$value · $sub" else value,
             color = valueColor,
-            fontSize = 13.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        if (sub != null) {
-            Text(
-                text = sub,
-                color = Color.White.copy(alpha = 0.5f),
-                fontSize = 10.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
     }
 }

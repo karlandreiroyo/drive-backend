@@ -1,29 +1,60 @@
 /*
-- ESP32 Drowsiness Alert Controller
-- ---------------------------------
-- Drives 6 vibration motors + 1 buzzer from commands sent by the Raspberry Pi/PC bridge.
+ * ESP32 Drowsiness Alert Controller  (Serial + Wi-Fi HTTP)
+ * --------------------------------------------------------
+ * Drives 6 vibration motors + 1 buzzer. Two ways to control it:
  *
-- Hardware (logic signals only -- see README: use a transistor/MOSFET driver,
-- the GPIO pins must NOT power motors/buzzer directly):
--   Motors : GPIO 4, 16, 17, 18, 19, 21
--   Buzzer : GPIO 23
--   Serial2: RX = GPIO 26 (<- Pi TX / GPIO14), TX = GPIO 27 (-> Pi RX / GPIO15)
--   USB    : "Serial" is the USB port the Pi opens as /dev/ttyUSB0
+ *  1) Mobile app over Wi-Fi (HTTP, port 80)
+ *       GET /        -> "ESP32 Drowsiness System API is Active!"  (app health check)
+ *       GET /alert   -> alert ON  (pulsing, stays on until /clear)
+ *       GET /clear   -> alert OFF
+ *       GET /status  -> JSON: {"esp32":"CONNECTED","alert":bool,"rssi":n,"uptime_s":n}
  *
-- Command protocol (newline-terminated ASCII, accepted on BOTH Serial & Serial2):
--   Pi  -> ESP32 : "PING"          -> ESP32 replies "PONG" on the same port
--                  "DROWSY_ALERT"  -> alert ON continuously (pulsing)
--                  "CLEAR_ALERT"   -> alert OFF immediately
--   ESP32 -> Pi  : "READY" | "ALERT_ON" | "ALERT_OFF" | "FAILSAFE_TIMEOUT" | "PONG"
+ *  2) Raspberry Pi / PC bridge over Serial (USB) or Serial2 (UART)
+ *       Newline-terminated ASCII:
+ *       Pi  -> ESP32 : "PING"          -> ESP32 replies "PONG" on the same port
+ *                      "DROWSY_ALERT"  -> alert ON (pulsing)
+ *                      "CLEAR_ALERT"   -> alert OFF immediately
+ *       ESP32 -> Pi  : "READY" | "ALERT_ON" | "ALERT_OFF" | "FAILSAFE_TIMEOUT" | "PONG"
  *
-- Behaviour:
-- Non-blocking: no delay() anywhere except a safe startup delay in setup(). Alert pulses 500 ms ON / 300 ms OFF.
-- Alert stays active until CLEAR_ALERT (latched), so it does not flicker.
-- Fail-safe: if no command/heartbeat arrives for 5 s while alerting, all
--     outputs are turned off (protects against a crashed/unplugged Pi/PC).
+ * Hardware (logic signals only: use a transistor/MOSFET driver, the GPIO pins
+ * must NOT power motors/buzzer directly):
+ *   Motors : GPIO 4, 16, 17, 18, 19, 21
+ *   Buzzer : GPIO 23
+ *   Serial2: RX = GPIO 26 (<- Pi TX / GPIO14), TX = GPIO 27 (-> Pi RX / GPIO15)
+ *
+ * Behaviour:
+ *   - Non-blocking: no delay() in loop(); Wi-Fi never blocks startup, so serial
+ *     control works even if Wi-Fi is down. Pulse is 500 ms ON / 300 ms OFF.
+ *   - Alert is latched until /clear or CLEAR_ALERT.
+ *   - Serial fail-safe: if an alert was started over SERIAL and no command or
+ *     PING arrives for 5 s, outputs turn off (crashed/unplugged Pi/PC).
+ *   - Alerts started over HTTP are NOT subject to that 5 s fail-safe (the app
+ *     does not send heartbeats). Optional cap: HTTP_ALERT_MAX_MS below.
+ *
+ * Only ONE controller should drive alerts at a time (the app OR the Pi/PC),
+ * otherwise one will switch the other off.
  */
 
-// ---- Pin assignments (kept exactly as requested) ----
+#include <WiFi.h>
+#include <WebServer.h>
+
+// ---- Wi-Fi (2.4 GHz only). Fill these in; do not share your real password. ----
+const char* WIFI_SSID = "Mosh";
+const char* WIFI_PASS = "09666741206";
+
+// Optional: fixed IP so the app's saved address never changes.
+// Uncomment and match YOUR network (gateway = your router/hotspot address).
+// #define USE_STATIC_IP
+#ifdef USE_STATIC_IP
+IPAddress STATIC_IP(10, 188, 151, 218);
+IPAddress GATEWAY(10, 188, 151, 1);
+IPAddress SUBNET(255, 255, 255, 0);
+IPAddress DNS1(8, 8, 8, 8);
+#endif
+
+WebServer server(80);
+
+// ---- Pin assignments ----
 const int motorPins[6] = {4, 16, 17, 18, 19, 21};  // 6 vibration modules
 const int buzzerPin = 23;                          // buzzer signal
 const int RX_PIN = 26;                             // Serial2 RX <- Pi TX (GPIO14)
@@ -32,15 +63,21 @@ const int TX_PIN = 27;                             // Serial2 TX -> Pi RX (GPIO1
 // ---- Timing constants (milliseconds) ----
 const unsigned long PULSE_ON_MS = 500;
 const unsigned long PULSE_OFF_MS = 300;
-const unsigned long FAILSAFE_TIMEOUT_MS = 5000;
+const unsigned long FAILSAFE_TIMEOUT_MS = 5000;     // serial-started alerts only
+const unsigned long HTTP_ALERT_MAX_MS = 0;          // 0 = no cap; e.g. 120000 = auto-off after 2 min
+const unsigned long WIFI_RETRY_MS = 10000;
 const unsigned int MAX_LINE_LEN = 120;
 
 // ---- State ----
-bool alertActive = false;       // latched alert state
-bool pulseOn = false;           // current phase of the pulse
-bool readyAnnounced = false;    // re-send READY on first PING so the Pi catches it
+bool alertActive = false;        // latched alert state
+bool alertFromSerial = false;    // who started the current alert
+bool pulseOn = false;            // current phase of the pulse
+bool readyAnnounced = false;     // re-send READY on first PING so the Pi catches it
+bool wifiWasConnected = false;
 unsigned long lastPulseChange = 0;
-unsigned long lastCommandTime = 0;  // last time ANY command/heartbeat arrived
+unsigned long lastCommandTime = 0;  // last time ANY serial command/heartbeat arrived
+unsigned long alertStartedAt = 0;
+unsigned long lastWifiRetry = 0;
 
 // ---- Per-port line buffers (non-blocking accumulation) ----
 String usbLine = "";
@@ -60,19 +97,20 @@ void broadcast(const String &msg) {
   Serial2.println(msg);
 }
 
-void startAlert() {
-  lastCommandTime = millis();
+void startAlert(bool fromSerial) {
+  if (fromSerial) lastCommandTime = millis();
+  alertFromSerial = fromSerial;
   if (!alertActive) {
     alertActive = true;
     pulseOn = true;
     lastPulseChange = millis();
+    alertStartedAt = millis();
     setOutputs(true);
     broadcast("ALERT_ON");
   }
 }
 
 void stopAlert() {
-  lastCommandTime = millis();
   if (alertActive) {
     alertActive = false;
     pulseOn = false;
@@ -84,16 +122,53 @@ void stopAlert() {
 }
 
 // Fail-safe stop: same as stopAlert but also reports why.
-void failSafeStop() {
+void failSafeStop(const char *reason) {
   alertActive = false;
   pulseOn = false;
   setOutputs(false);
   broadcast("ALERT_OFF");
-  broadcast("FAILSAFE_TIMEOUT");
+  broadcast(reason);
 }
 
+// ---------- HTTP (mobile app) ----------
+void sendJson(int code, const String &body) {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(code, "application/json", body);
+}
+
+void handleRoot() {
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "text/plain", "ESP32 Drowsiness System API is Active!");
+}
+
+void handleApiAlert() {
+  Serial.println("--> HTTP /alert");
+  startAlert(false);
+  sendJson(200, "{\"status\":\"success\",\"message\":\"Alert triggered\"}");
+}
+
+void handleApiClear() {
+  Serial.println("--> HTTP /clear");
+  stopAlert();
+  sendJson(200, "{\"status\":\"success\",\"message\":\"Alert cleared\"}");
+}
+
+void handleApiStatus() {
+  String json = "{\"esp32\":\"CONNECTED\",\"alert\":";
+  json += alertActive ? "true" : "false";
+  json += ",\"rssi\":" + String(WiFi.RSSI());
+  json += ",\"uptime_s\":" + String(millis() / 1000) + "}";
+  sendJson(200, json);
+}
+
+void handleNotFound() {
+  sendJson(404, "{\"status\":\"error\",\"message\":\"Not found\"}");
+}
+
+// ---------- Serial (Raspberry Pi / PC bridge) ----------
 void handleCommand(const String &cmd, bool fromUsb) {
-  // Any command (including the PING heartbeat) refreshes the fail-safe timer.
+  // Any serial command (including the PING heartbeat) refreshes the fail-safe timer.
   lastCommandTime = millis();
 
   if (cmd == "PING") {
@@ -113,7 +188,7 @@ void handleCommand(const String &cmd, bool fromUsb) {
       broadcast("READY");
     }
   } else if (cmd == "DROWSY_ALERT") {
-    startAlert();
+    startAlert(true);
   } else if (cmd == "CLEAR_ALERT") {
     stopAlert();
   } else if (cmd.length() > 0) {
@@ -142,8 +217,8 @@ void readPort(Stream &port, String &buffer, bool fromUsb) {
 }
 
 void setup() {
-  Serial.begin(115200);                              // USB Serial
-  delay(1000);                                       // Give USB Serial time to stabilize
+  Serial.begin(115200);                               // USB Serial
+  delay(1000);                                        // let USB Serial stabilize
   Serial2.begin(115200, SERIAL_8N1, RX_PIN, TX_PIN);  // UART link
 
   pinMode(buzzerPin, OUTPUT);
@@ -153,18 +228,55 @@ void setup() {
     digitalWrite(motorPins[i], LOW);
   }
 
+  // Non-blocking Wi-Fi: serial control works even if Wi-Fi is down.
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);          // lower latency for /alert and /clear
+  WiFi.setAutoReconnect(true);
+#ifdef USE_STATIC_IP
+  WiFi.config(STATIC_IP, GATEWAY, SUBNET, DNS1);
+#endif
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.println("Connecting to Wi-Fi (non-blocking)...");
+
+  server.on("/", handleRoot);
+  server.on("/alert", handleApiAlert);
+  server.on("/clear", handleApiClear);
+  server.on("/status", handleApiStatus);
+  server.onNotFound(handleNotFound);
+  server.begin();
+
   lastCommandTime = millis();
   broadcast("READY");
-  Serial.println("ESP32 alert controller ready. Commands: DROWSY_ALERT, CLEAR_ALERT, PING");
+  Serial.println("ESP32 alert controller ready. Serial: DROWSY_ALERT, CLEAR_ALERT, PING. HTTP: /, /alert, /clear, /status");
 }
 
 void loop() {
-  // Service both ports first (non-blocking).
+  // 1. HTTP requests from the mobile app
+  server.handleClient();
+
+  // 2. Serial commands from the Pi / PC bridge
   readPort(Serial, usbLine, true);
   readPort(Serial2, piLine, false);
 
   unsigned long now = millis();
 
+  // 3. Wi-Fi status + manual retry (in addition to auto-reconnect)
+  bool connected = (WiFi.status() == WL_CONNECTED);
+  if (connected && !wifiWasConnected) {
+    Serial.println("Wi-Fi connected!");
+    Serial.print("ESP32 Web Server IP for Mobile App: http://");
+    Serial.println(WiFi.localIP());
+  } else if (!connected && wifiWasConnected) {
+    Serial.println("Wi-Fi lost, retrying...");
+  }
+  wifiWasConnected = connected;
+  if (!connected && now - lastWifiRetry >= WIFI_RETRY_MS) {
+    lastWifiRetry = now;
+    WiFi.disconnect();
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+  }
+
+  // 4. Alert pulse + safety
   if (alertActive) {
     // Continuous non-blocking pulse: 500 ms ON / 300 ms OFF.
     unsigned long interval = pulseOn ? PULSE_ON_MS : PULSE_OFF_MS;
@@ -174,9 +286,14 @@ void loop() {
       setOutputs(pulseOn);
     }
 
-    // Fail-safe: connection went silent for 5 s while alerting -> everything off.
-    if (now - lastCommandTime >= FAILSAFE_TIMEOUT_MS) {
-      failSafeStop();
+    // Serial fail-safe: Pi/PC went silent for 5 s while it owns the alert.
+    if (alertFromSerial && now - lastCommandTime >= FAILSAFE_TIMEOUT_MS) {
+      failSafeStop("FAILSAFE_TIMEOUT");
+    }
+
+    // Optional cap for app-started alerts (disabled when HTTP_ALERT_MAX_MS == 0).
+    if (!alertFromSerial && HTTP_ALERT_MAX_MS > 0 && now - alertStartedAt >= HTTP_ALERT_MAX_MS) {
+      failSafeStop("HTTP_ALERT_TIMEOUT");
     }
   }
 }

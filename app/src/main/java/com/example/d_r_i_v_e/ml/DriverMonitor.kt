@@ -60,6 +60,13 @@ interface DriverMonitor : AutoCloseable {
  * is approximated by prolonged stillness; head pose by the centroid of the
  * brightest region. Replace with the TFLite/ML Kit landmark model for real
  * facial measurements.
+ *
+ * NOTE: because "drowsy" here means "the frame has been still", a driver who
+ * simply sits motionless will also be flagged. Tune [DROWSY_STILL_MS] if you
+ * get false alarms.
+ *
+ * All thresholds are TIME-based (milliseconds), not frame-count based, so the
+ * behaviour is the same whether the camera delivers 4 fps or 30 fps.
  */
 class HeuristicDriverMonitor(
     private val gridSize: Int = 24
@@ -69,7 +76,7 @@ class HeuristicDriverMonitor(
     private var trackingStartedAtMs = -1L
     private var lastEventAtMs = 0L
     private var lastBlinkAtMs = 0L
-    private var closedStreak = 0
+    private var stillSinceMs = -1L
 
     private val samples = ArrayDeque<Sample>()
     private val blinkTimes = ArrayDeque<Long>()
@@ -105,24 +112,42 @@ class HeuristicDriverMonitor(
             blinkTimes.removeFirst()
         }
 
+        // Blinks per minute over the window actually observed (max 60 s).
         val trackedForMs = (now - trackingStartedAtMs).coerceAtLeast(1L)
         val blinkRatePerMinute = if (trackedForMs >= MIN_TRACK_MS) {
-            (blinkTimes.size * 60_000f / trackedForMs).roundToInt()
+            val spanMs = minOf(trackedForMs, WINDOW_MS)
+            (blinkTimes.size * 60_000f / spanMs).roundToInt()
         } else {
             null
         }
 
         // Eye closure proxy: how still the frame has been recently.
         val closed = motion < CLOSED_MOTION
-        closedStreak = if (closed) closedStreak + 1 else 0
-        val closureWindow = samples.takeLast(CLOSURE_WINDOW_FRAMES)
-        val eyeClosureRatio = if (closureWindow.isEmpty()) {
-            0f
+        stillSinceMs = if (closed) {
+            if (stillSinceMs < 0L) now else stillSinceMs
         } else {
-            closureWindow.count { it.motion < CLOSED_MOTION } / closureWindow.size.toFloat()
+            -1L
         }
+        val stillForMs = if (stillSinceMs >= 0L) now - stillSinceMs else 0L
 
-        val drowsy = closedStreak >= DROWSY_STREAK_FRAMES || eyeClosureRatio >= 0.8f
+        // Share of "still" samples in the last CLOSURE_WINDOW_MS (time-based).
+        var windowCount = 0
+        var windowClosed = 0
+        var oldestInWindow = now
+        for (i in samples.indices.reversed()) {
+            val s = samples[i]
+            if (now - s.at > CLOSURE_WINDOW_MS) break
+            windowCount++
+            if (s.motion < CLOSED_MOTION) windowClosed++
+            oldestInWindow = s.at
+        }
+        val eyeClosureRatio = if (windowCount == 0) 0f else windowClosed / windowCount.toFloat()
+        val windowSpanMs = now - oldestInWindow
+
+        // Drowsy: continuously still long enough, or almost always still across the
+        // recent window (this part gives a little hysteresis against single noisy frames).
+        val drowsy = stillForMs >= DROWSY_STILL_MS ||
+                (eyeClosureRatio >= 0.8f && windowSpanMs >= DROWSY_STILL_MS)
         val drowsinessConfidence = if (drowsy) {
             (0.55f + eyeClosureRatio * 0.42f).coerceAtMost(0.97f)
         } else {
@@ -196,7 +221,7 @@ class HeuristicDriverMonitor(
         }
     }
 
-    // Samples the Y (luma) plane on a coarse grid — cheap enough per frame.
+    // Samples the Y (luma) plane on a coarse grid - cheap enough per frame.
     private fun sampleLuma(image: ImageProxy): FloatArray? {
         val plane = image.planes.firstOrNull() ?: return null
         val width = image.width
@@ -234,8 +259,13 @@ class HeuristicDriverMonitor(
         const val BLINK_MIN_GAP_MS = 250L
         const val BLINK_MIN_MOTION = 0.03f
         const val CLOSED_MOTION = 0.015f
-        const val CLOSURE_WINDOW_FRAMES = 16
-        const val DROWSY_STREAK_FRAMES = 12
+
+        // How long the frame must stay still to count as "eyes closed / drowsy".
+        // Total delay to the hardware ~= this + the controller's 1 s hold (~2 s).
+        // Raise to 2000-3000 if you get false alarms.
+        const val DROWSY_STILL_MS = 1_000L
+        const val CLOSURE_WINDOW_MS = 2_000L
+
         const val MOTION_EVENT_THRESHOLD = 0.10f
         const val MOTION_EVENT_COOLDOWN_MS = 5_000L
         const val DROWSY_EVENT_COOLDOWN_MS = 30_000L

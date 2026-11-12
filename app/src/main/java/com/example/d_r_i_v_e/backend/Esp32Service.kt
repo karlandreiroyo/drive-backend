@@ -18,11 +18,15 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Service for communicating directly with the ESP32 alert controller over local Wi-Fi.
- * Endpoints:
- * - GET /      : health check (returns "ESP32 Drowsiness System API is Active!")
- * - GET /alert : turns on vibration motors and buzzer
- * - GET /clear : turns off vibration motors and buzzer
+ * Low-level HTTP layer for the ESP32 over local Wi-Fi.
+ *
+ *  - Base-URL configuration (SharedPreferences, default http://10.188.151.218)
+ *  - GET /  health check (2 s timeout) -> HardwareStatus
+ *  - sendAlert()/sendClear(): one-shot helpers (fast 800 ms timeout)
+ *
+ * The automatic alert/clear cycle is owned by [Esp32AlertController].
+ * Do NOT call sendAlert()/sendClear() from other places while the controller
+ * is running, or the two will fight each other.
  */
 object Esp32Service {
     private const val TAG = "Esp32Service"
@@ -30,7 +34,10 @@ object Esp32Service {
     private const val KEY_BASE_URL = "esp32_base_url"
     const val DEFAULT_BASE_URL = "http://10.188.151.218"
 
-    // OkHttpClient configured with 2-second timeout (Task 2 requirement)
+    /** Last known alert state as seen by sendAlert()/sendClear(). */
+    val isAlertActive = AtomicBoolean(false)
+
+    // Health check client: 2 s
     private val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(2, TimeUnit.SECONDS)
@@ -41,7 +48,16 @@ object Esp32Service {
             .build()
     }
 
-    private val isAlertActive = AtomicBoolean(false)
+    // Alert/clear client: fast, so hardware reacts within the 2 s target
+    private val alertClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(800, TimeUnit.MILLISECONDS)
+            .readTimeout(800, TimeUnit.MILLISECONDS)
+            .writeTimeout(800, TimeUnit.MILLISECONDS)
+            .callTimeout(800, TimeUnit.MILLISECONDS)
+            .retryOnConnectionFailure(false)
+            .build()
+    }
 
     fun getBaseUrl(context: Context = DriveApplication.instance): String {
         return try {
@@ -78,23 +94,14 @@ object Esp32Service {
 
     /**
      * Polls GET / with a 2 s timeout.
-     * Returns CONNECTED on HTTP 200, otherwise DISCONNECTED with the real error reason.
+     * CONNECTED on HTTP 2xx, otherwise DISCONNECTED with the real error reason.
      */
     suspend fun checkStatus(): HardwareStatus = withContext(Dispatchers.IO) {
         val baseUrl = getBaseUrl()
         val request = try {
-            Request.Builder()
-                .url("$baseUrl/")
-                .get()
-                .build()
+            Request.Builder().url("$baseUrl/").get().build()
         } catch (e: Exception) {
-            return@withContext HardwareStatus(
-                online = false,
-                esp32Connected = false,
-                alertActive = false,
-                connection = HardwareConnection.Disconnected,
-                message = "Invalid URL: ${e.message}"
-            )
+            return@withContext disconnected("Invalid URL: ${e.message}")
         }
 
         try {
@@ -112,13 +119,7 @@ object Esp32Service {
                 } else {
                     val reason = "HTTP ${response.code}: ${response.message.ifBlank { "Error" }}"
                     Log.w(TAG, "ESP32 health check HTTP error: $reason")
-                    HardwareStatus(
-                        online = false,
-                        esp32Connected = false,
-                        alertActive = false,
-                        connection = HardwareConnection.Disconnected,
-                        message = reason
-                    )
+                    disconnected(reason)
                 }
             }
         } catch (e: CancellationException) {
@@ -126,92 +127,57 @@ object Esp32Service {
         } catch (e: Exception) {
             val reason = formatError(e, baseUrl)
             Log.w(TAG, "ESP32 health check failed: $reason")
-            HardwareStatus(
-                online = false,
-                esp32Connected = false,
-                alertActive = false,
-                connection = HardwareConnection.Disconnected,
-                message = reason
-            )
+            disconnected(reason)
         }
     }
 
-    /**
-     * Calls GET /alert to trigger ESP32 vibration motors and buzzer.
-     * Safe: Catches all errors without crashing.
-     */
-    suspend fun sendAlert(): Result<String> = withContext(Dispatchers.IO) {
-        val baseUrl = getBaseUrl()
-        val request = try {
-            Request.Builder()
-                .url("$baseUrl/alert")
-                .get()
-                .build()
-        } catch (e: Exception) {
-            return@withContext Result.failure(e)
-        }
+    /** GET /alert: motors + buzzer ON. Never throws (except cancellation). */
+    suspend fun sendAlert(): Result<String> = sendCommand("alert", turnOn = true)
 
-        try {
-            client.newCall(request).execute().use { response ->
-                val body = response.body?.string().orEmpty()
-                if (response.isSuccessful) {
-                    isAlertActive.set(true)
-                    Log.i(TAG, "ESP32 /alert triggered successfully (HTTP ${response.code})")
-                    Result.success(body)
-                } else {
-                    val err = "HTTP ${response.code}: ${response.message}"
-                    Log.w(TAG, "ESP32 /alert failed: $err")
-                    Result.failure(IOException(err))
-                }
+    /** GET /clear: motors + buzzer OFF. Never throws (except cancellation). */
+    suspend fun sendClear(): Result<String> = sendCommand("clear", turnOn = false)
+
+    private suspend fun sendCommand(path: String, turnOn: Boolean): Result<String> =
+        withContext(Dispatchers.IO) {
+            val baseUrl = getBaseUrl()
+            val request = try {
+                Request.Builder().url("$baseUrl/$path").get().build()
+            } catch (e: Exception) {
+                Log.e(TAG, "ESP32 /$path invalid URL [$baseUrl]: ${e.message}")
+                return@withContext Result.failure(e)
             }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            val err = formatError(e, baseUrl)
-            Log.e(TAG, "ESP32 /alert call failed without crashing: $err", e)
-            Result.failure(e)
-        }
-    }
 
-    /**
-     * Calls GET /clear to turn off ESP32 vibration motors and buzzer.
-     * Safe: Catches all errors without crashing.
-     */
-    suspend fun sendClear(): Result<String> = withContext(Dispatchers.IO) {
-        val baseUrl = getBaseUrl()
-        val request = try {
-            Request.Builder()
-                .url("$baseUrl/clear")
-                .get()
-                .build()
-        } catch (e: Exception) {
-            return@withContext Result.failure(e)
-        }
-
-        try {
-            client.newCall(request).execute().use { response ->
-                val body = response.body?.string().orEmpty()
-                if (response.isSuccessful) {
-                    isAlertActive.set(false)
-                    Log.i(TAG, "ESP32 /clear turned off outputs (HTTP ${response.code})")
-                    Result.success(body)
-                } else {
-                    val err = "HTTP ${response.code}: ${response.message}"
-                    Log.w(TAG, "ESP32 /clear failed: $err")
-                    Result.failure(IOException(err))
+            try {
+                alertClient.newCall(request).execute().use { response ->
+                    val body = response.body?.string().orEmpty()
+                    if (response.isSuccessful) {
+                        isAlertActive.set(turnOn)
+                        Log.i(TAG, "ESP32 /$path OK (HTTP ${response.code})")
+                        Result.success(body)
+                    } else {
+                        val err = "HTTP ${response.code}: ${response.message}"
+                        Log.w(TAG, "ESP32 /$path failed: $err")
+                        Result.failure(IOException(err))
+                    }
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "ESP32 /$path call failed: ${formatError(e, baseUrl)}", e)
+                Result.failure(e)
             }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            val err = formatError(e, baseUrl)
-            Log.e(TAG, "ESP32 /clear call failed without crashing: $err", e)
-            Result.failure(e)
         }
-    }
+
+    private fun disconnected(reason: String) = HardwareStatus(
+        online = false,
+        esp32Connected = false,
+        alertActive = false,
+        connection = HardwareConnection.Disconnected,
+        message = reason
+    )
 
     private fun formatError(e: Throwable, baseUrl: String): String = when (e) {
-        is SocketTimeoutException -> "Connection timed out (2s). Check ESP32 Wi-Fi & IP."
+        is SocketTimeoutException -> "Connection timed out. Check ESP32 Wi-Fi & IP."
         is ConnectException -> "Connection refused at $baseUrl (${e.message ?: "host unreachable"})."
         is UnknownHostException -> "Host unreachable ($baseUrl). Check IP address."
         is IOException -> {
