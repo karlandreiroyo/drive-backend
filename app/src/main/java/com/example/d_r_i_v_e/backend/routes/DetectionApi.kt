@@ -99,13 +99,14 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Session startup failed while opening trip", e)
+                val realError = e.localizedMessage ?: e.message ?: e.javaClass.simpleName
+                Log.e(TAG, "Session startup failed while opening trip: $realError", e)
                 if (generation != sessionGeneration) return@launch
                 activeTrip = null
                 _sessionState.value = DrivingSessionState.Idle
                 _sessionStartedAt.value = null
                 _logStatus.value = LocalLogStatus.Failed
-                _statusMessage.value = "Couldn't start the driving session (${e.javaClass.simpleName}). Check Logcat: $TAG."
+                _statusMessage.value = "Couldn't start driving session: $realError"
             }
         }
     }
@@ -126,7 +127,11 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     fun onDetection(result: DetectionResult) {
-        val trip = activeTrip ?: return
+        val trip = activeTrip
+        if (trip == null) {
+            Log.w(TAG, "Cannot save incident: activeTrip is null (sessionState=${_sessionState.value}). Ensure a driving session was started.")
+            return
+        }
         val event = DetectionEvent(
             label = result.label,
             confidence = result.confidence,
@@ -156,10 +161,11 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Couldn't save incident", e)
+                val realError = e.localizedMessage ?: e.message ?: e.javaClass.simpleName
+                Log.e(TAG, "Couldn't save incident [label=${result.label}, tripId=${trip.id}, userId=${trip.userId}]: $realError", e)
                 if (activeTrip?.id != trip.id) return@launch
                 _logStatus.value = LocalLogStatus.Failed
-                _statusMessage.value = "Local save failed (${e.javaClass.simpleName}). Check Logcat: $TAG."
+                _statusMessage.value = "Couldn't save incident: $realError"
             }
         }
     }

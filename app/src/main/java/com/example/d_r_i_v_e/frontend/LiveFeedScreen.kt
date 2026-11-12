@@ -47,11 +47,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.Observer
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.d_r_i_v_e.alerts.rememberLocalAlertManager
+import com.example.d_r_i_v_e.backend.Esp32Service
 import com.example.d_r_i_v_e.backend.routes.DetectionEvent
 import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
 import com.example.d_r_i_v_e.backend.routes.DrivingSessionState
@@ -63,6 +65,7 @@ import com.example.d_r_i_v_e.ml.DetectionResult
 import com.example.d_r_i_v_e.ml.DriverMonitorFrame
 import com.example.d_r_i_v_e.ml.HeuristicDriverMonitor
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -148,9 +151,55 @@ fun LiveFeedScreen(
         }
     }
 
+    val coroutineScope = rememberCoroutineScope()
+    var isEsp32AlertActive by remember { mutableStateOf(false) }
+
+    // Task 3: Call /alert when drowsiness is detected and /clear when the driver recovers; handle errors without crashing
+    LaunchedEffect(monitorFrame?.drowsy, isDrivingActive) {
+        if (!isDrivingActive) {
+            if (isEsp32AlertActive) {
+                isEsp32AlertActive = false
+                coroutineScope.launch { Esp32Service.sendClear() }
+            }
+            return@LaunchedEffect
+        }
+
+        val isDrowsy = monitorFrame?.drowsy == true
+        if (isDrowsy && !isEsp32AlertActive) {
+            isEsp32AlertActive = true
+            coroutineScope.launch { Esp32Service.sendAlert() }
+        } else if (!isDrowsy && isEsp32AlertActive) {
+            isEsp32AlertActive = false
+            coroutineScope.launch { Esp32Service.sendClear() }
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            if (isEsp32AlertActive) {
+                isEsp32AlertActive = false
+                coroutineScope.launch { Esp32Service.sendClear() }
+            }
+        }
+    }
+
+    // Task 3 & 5: Decoupled detection callback. Local incident saving runs independently of ESP32 connection/alerting.
     val onFrameDetection: (DetectionResult) -> Unit = { result ->
         if (detectionViewModel.sessionState.value == DrivingSessionState.Active) {
-            localAlertManager.triggerDetectionAlert(result.label, result.confidence)
+            // 1. Play local audible alert tone and TTS warning safely
+            runCatching {
+                localAlertManager.triggerDetectionAlert(result.label, result.confidence)
+            }.onFailure { Log.w("LiveFeedScreen", "Local audio alert failed: ${it.message}") }
+
+            // 2. Trigger ESP32 alert if label indicates drowsiness
+            if (result.label.contains("drows", ignoreCase = true)) {
+                if (!isEsp32AlertActive) {
+                    isEsp32AlertActive = true
+                    coroutineScope.launch { Esp32Service.sendAlert() }
+                }
+            }
+
+            // 3. Separately and independently save the incident to Room/Sync
             detectionViewModel.onDetection(result)
         }
     }
@@ -279,55 +328,48 @@ fun LiveFeedScreen(
                         )
                     }
 
-                    // Hardware node link (Raspberry Pi + ESP32), polled live.
-                    if (isDrivingActive) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        if (hardwareStatus.esp32Connected) Color(0xFF4CD964)
-                                        else Color(0xFFFF6B6B)
-                                    )
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
+                    // Hardware node link (ESP32), polled live every 3s.
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (hardwareStatus.esp32Connected) Color(0xFF4CD964)
+                                    else Color(0xFFFF6B6B)
+                                )
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (hardwareStatus.esp32Connected) "ESP32: CONNECTED" else "ESP32: DISCONNECTED",
+                            color = if (hardwareStatus.esp32Connected) Color(0xFF4CD964)
+                            else Color(0xFFFF6B6B),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        if (hardwareStatus.alertActive || isEsp32AlertActive) {
                             Text(
-                                text = when (hardwareStatus.connection) {
-                                    HardwareConnection.Connected -> "ESP32: CONNECTED"
-                                    HardwareConnection.Checking -> "ESP32: CHECKING BRIDGE…"
-                                    HardwareConnection.BridgeOffline -> "ESP32: BRIDGE OFFLINE"
-                                    HardwareConnection.SerialDisconnected -> "ESP32: NO SERIAL HANDSHAKE"
-                                    HardwareConnection.Unavailable -> "ESP32: STATUS UNAVAILABLE"
-                                    HardwareConnection.Unauthorized -> "ESP32: LOGIN REQUIRED"
-                                },
-                                color = if (hardwareStatus.esp32Connected) Color(0xFF4CD964)
-                                else Color(0xFFFF6B6B),
+                                text = " · Drowsy alert active",
+                                color = Color(0xFFFF6B6B),
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium
                             )
-                            if (hardwareStatus.alertActive) {
-                                Text(
-                                    text = " · Drowsy alert",
-                                    color = Color(0xFFFF6B6B),
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
                         }
                     }
 
-                    if (isDrivingActive && hardwareStatus.message != null) {
+                    if (!hardwareStatus.esp32Connected && hardwareStatus.message != null) {
                         Text(
                             text = hardwareStatus.message,
                             color = Color.White.copy(alpha = 0.6f),
                             fontSize = 11.sp,
-                            modifier = Modifier.padding(top = 4.dp)
+                            modifier = Modifier
+                                .padding(top = 4.dp)
+                                .align(Alignment.CenterHorizontally)
                         )
                     }
 
@@ -397,6 +439,10 @@ fun LiveFeedScreen(
                         onClick = {
                             if (isDrivingActive) {
                                 showAlert = false
+                                if (isEsp32AlertActive) {
+                                    isEsp32AlertActive = false
+                                    coroutineScope.launch { Esp32Service.sendClear() }
+                                }
                                 detectionViewModel.finishSession { message ->
                                     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                                 }

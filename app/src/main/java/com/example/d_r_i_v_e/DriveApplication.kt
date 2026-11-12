@@ -11,8 +11,14 @@ import kotlinx.coroutines.launch
 class DriveApplication : Application() {
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    companion object {
+        lateinit var instance: DriveApplication
+            private set
+    }
+
     override fun onCreate() {
         super.onCreate()
+        instance = this
         // Drain any persisted outbox immediately; periodic work is the crash safety net.
         SyncScheduler.enqueue(this)
         SyncScheduler.schedulePeriodic(this)

@@ -13,10 +13,13 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -29,9 +32,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.d_r_i_v_e.backend.Esp32Service
 
 @Composable
 fun SettingsScreen(
@@ -47,7 +52,10 @@ fun SettingsScreen(
     onTabMapClick: () -> Unit = {},
     onTabSettingsClick: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     var showLogoutDialog by remember { mutableStateOf(false) }
+    var showEsp32Dialog by remember { mutableStateOf(false) }
+    var esp32UrlInput by remember { mutableStateOf(Esp32Service.getBaseUrl(context)) }
 
     Box(
         modifier = Modifier
@@ -102,7 +110,7 @@ fun SettingsScreen(
                     .padding(horizontal = 20.dp)
             ) {
 
-                // Hardware status card
+                // Hardware status card (tap to configure ESP32 URL)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -114,22 +122,33 @@ fun SettingsScreen(
                             else
                                 Modifier
                         )
+                        .clickable {
+                            esp32UrlInput = Esp32Service.getBaseUrl(context)
+                            showEsp32Dialog = true
+                        }
                         .padding(horizontal = 20.dp, vertical = 16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Bluetooth,
+                        imageVector = Icons.Filled.Wifi,
                         contentDescription = "Hardware status",
                         tint = if (isHardwareConnected) Color(0xFF4CD964) else Color.White.copy(alpha = 0.9f),
                         modifier = Modifier.size(40.dp)
                     )
                     Spacer(modifier = Modifier.width(16.dp))
-                    Text(
-                        text = if (isHardwareConnected) "Hardware Connected" else "Hardware Not Connected",
-                        color = if (isHardwareConnected) Color(0xFF4CD964) else Color.White,
-                        fontSize = 19.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isHardwareConnected) "ESP32 Connected" else "ESP32 Not Connected",
+                            color = if (isHardwareConnected) Color(0xFF4CD964) else Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Tap to configure IP / URL",
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = 12.sp
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(20.dp))
@@ -141,6 +160,14 @@ fun SettingsScreen(
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color(0xFF4A4A4C))
                 ) {
+                    SettingsMenuItem(
+                        icon = Icons.Filled.Wifi,
+                        label = "ESP32 Wi-Fi Settings",
+                        onClick = {
+                            esp32UrlInput = Esp32Service.getBaseUrl(context)
+                            showEsp32Dialog = true
+                        }
+                    )
                     SettingsMenuItem(
                         icon = Icons.Filled.Person,
                         label = "Account & Profile",
@@ -217,6 +244,75 @@ fun SettingsScreen(
                 dismissButton = {
                     TextButton(
                         onClick = { showLogoutDialog = false },
+                        colors = ButtonDefaults.textButtonColors(contentColor = Color.White.copy(alpha = 0.8f))
+                    ) {
+                        Text(
+                            text = "Cancel",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                },
+                containerColor = Color(0xFF2C2C2E),
+                titleContentColor = Color.White,
+                textContentColor = Color.White.copy(alpha = 0.8f),
+                shape = RoundedCornerShape(20.dp)
+            )
+        }
+
+        // ESP32 URL configuration dialog
+        if (showEsp32Dialog) {
+            AlertDialog(
+                onDismissRequest = { showEsp32Dialog = false },
+                title = {
+                    Text(
+                        text = "ESP32 Wi-Fi Address",
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = {
+                    Column {
+                        Text(
+                            text = "Enter the IP or hostname of your ESP32 on the local Wi-Fi network. Example: http://10.188.151.218",
+                            color = Color.White.copy(alpha = 0.75f),
+                            fontSize = 13.sp
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = esp32UrlInput,
+                            onValueChange = { esp32UrlInput = it },
+                            label = { Text("Base URL", color = Color.White.copy(alpha = 0.6f)) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = Color(0xFF4CD964),
+                                unfocusedBorderColor = Color.White.copy(alpha = 0.3f),
+                                cursorColor = Color(0xFF4CD964)
+                            )
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            Esp32Service.setBaseUrl(context, esp32UrlInput)
+                            showEsp32Dialog = false
+                        },
+                        colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF4CD964))
+                    ) {
+                        Text(
+                            text = "Save",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { showEsp32Dialog = false },
                         colors = ButtonDefaults.textButtonColors(contentColor = Color.White.copy(alpha = 0.8f))
                     ) {
                         Text(

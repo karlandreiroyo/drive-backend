@@ -1,30 +1,32 @@
 package com.example.d_r_i_v_e.backend.routes
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.d_r_i_v_e.backend.ApiConfig
-import com.example.d_r_i_v_e.backend.AuthSession
+import com.example.d_r_i_v_e.backend.Esp32Service
 import com.google.gson.annotations.SerializedName
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import retrofit2.Response
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
-import retrofit2.http.GET
-import java.io.IOException
-import java.util.concurrent.TimeUnit
 
-enum class HardwareConnection { Checking, Connected, BridgeOffline, SerialDisconnected, Unavailable, Unauthorized }
+/**
+ * Hardware connection states shown to the user.
+ * [Disconnected] is now the primary "not reachable" state for the direct-HTTP ESP32 path.
+ * The old bridge-based states are kept for any future Pi/PC bridge use.
+ */
+enum class HardwareConnection {
+    Checking,
+    Connected,
+    Disconnected,          // Direct HTTP to ESP32 — host unreachable or non-200 response
+    BridgeOffline,         // Pi/PC bridge not sending heartbeats
+    SerialDisconnected,    // Bridge online but ESP32 not responding over serial
+    Unavailable,           // Backend returned unexpected response
+    Unauthorized           // JWT expired / 401
+}
 
+/** Live snapshot of the ESP32 alert peripheral. */
 data class HardwareStatus(
     val online: Boolean = false,
     val esp32Connected: Boolean = false,
@@ -34,6 +36,8 @@ data class HardwareStatus(
     val connection: HardwareConnection = HardwareConnection.Checking,
     val message: String? = null
 )
+
+// ── DTOs kept for future Pi/PC bridge compatibility ──────────────────────────
 
 data class DeviceStatusDto(
     @SerializedName("esp32Connected") val esp32Connected: Boolean = false,
@@ -75,83 +79,23 @@ data class DeviceStatusResponseDto(
     }
 }
 
-interface DeviceApiService {
-    @GET("api/device/status")
-    suspend fun status(): Response<DeviceStatusResponseDto>
-}
+// ── ViewModel ────────────────────────────────────────────────────────────────
 
+/**
+ * Polls the ESP32 directly over local Wi-Fi every 3 seconds.
+ * HTTP 200 → CONNECTED; any error → DISCONNECTED with the real reason.
+ * The polling URL is read from [Esp32Service.getBaseUrl] on every tick, so
+ * changing the IP in Settings takes effect within 3 seconds without a restart.
+ */
 class HardwareStatusViewModel : ViewModel() {
     val status = flow {
         while (currentCoroutineContext().isActive) {
-            emit(DeviceApiClient.fetchStatus())
-            delay(2_500)
+            emit(Esp32Service.checkStatus())
+            delay(3_000)
         }
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(stopTimeoutMillis = 0, replayExpirationMillis = 0),
-        HardwareStatus()
+        HardwareStatus(connection = HardwareConnection.Checking, message = "Connecting to ESP32…")
     )
-}
-
-object DeviceApiClient {
-    private const val TAG = "DeviceApiClient"
-
-    private val httpClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .addInterceptor { chain ->
-                val builder = chain.request().newBuilder()
-                AuthSession.token?.let { builder.header("Authorization", "Bearer $it") }
-                chain.proceed(builder.build())
-            }
-            .callTimeout(5, TimeUnit.SECONDS)
-            .connectTimeout(5, TimeUnit.SECONDS)
-            .readTimeout(5, TimeUnit.SECONDS)
-            .build()
-    }
-
-    private val service: DeviceApiService by lazy {
-        Retrofit.Builder()
-            .baseUrl(ApiConfig.BASE_URL)
-            .client(httpClient)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-            .create(DeviceApiService::class.java)
-    }
-
-    suspend fun fetchStatus(): HardwareStatus = withContext(Dispatchers.IO) {
-        try {
-            val response = service.status()
-            when {
-                response.isSuccessful -> (response.body() ?: DeviceStatusResponseDto()).toHardwareStatus()
-                response.code() == 401 -> {
-                    AuthSession.notifySessionExpired()
-                    HardwareStatus(
-                        connection = HardwareConnection.Unauthorized,
-                        message = "Log in again to check the bridge."
-                    )
-                }
-                else -> {
-                    Log.w(TAG, "Device status HTTP ${response.code()}")
-                    HardwareStatus(
-                        connection = HardwareConnection.Unavailable,
-                        message = "Cannot check the bridge (HTTP ${response.code()})."
-                    )
-                }
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: IOException) {
-            Log.w(TAG, "Device status connection failed", e)
-            HardwareStatus(
-                connection = HardwareConnection.Unavailable,
-                message = "Cannot reach the backend. PC bridge status requires internet."
-            )
-        } catch (e: Exception) {
-            Log.w(TAG, "Device status fetch failed", e)
-            HardwareStatus(
-                connection = HardwareConnection.Unavailable,
-                message = "Could not read bridge status. Check Logcat: $TAG."
-            )
-        }
-    }
 }
