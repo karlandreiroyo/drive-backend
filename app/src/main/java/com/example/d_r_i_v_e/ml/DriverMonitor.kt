@@ -19,33 +19,14 @@ data class DriverMonitorFrame(
 )
 
 /**
- * What one analyzed frame produced: current metrics plus at most one
- * threshold-crossing event.
+- What one analyzed frame produced: current metrics plus at most one
+- threshold-crossing event.
  */
 data class MonitorUpdate(
     val frame: DriverMonitorFrame? = null,
     val event: DetectionResult? = null
 )
 
-/**
- * Per-frame monitor contract between CameraX and the UI. Swap
- * [HeuristicDriverMonitor] for a TensorFlow Lite / ML Kit implementation once
- * the trained model ships; the analyzer, ViewModel, and cards only see
- * [MonitorUpdate].
- *
- * TFLite integration sketch:
- *   class TfLiteMonitor(context: Context) : DriverMonitor {
- *       private val interpreter = Interpreter(loadModelFile(context))
- *       override fun analyze(image: ImageProxy): MonitorUpdate {
- *           val bitmap = image.toBitmap()          // camera-core 1.4+ extension
- *           val input = preprocess(bitmap)         // resize to model input size
- *           val output = Array(1) { FloatArray(NUM_CLASSES) }
- *           interpreter.run(input, output)
- *           return mapToUpdate(output[0])          // metrics + optional event
- *       }
- *       override fun close() = interpreter.close()
- *   }
- */
 interface DriverMonitor : AutoCloseable {
     /** Called on the analyzer thread; must be cheap enough for ~4 fps. */
     fun analyze(image: ImageProxy): MonitorUpdate
@@ -53,21 +34,6 @@ interface DriverMonitor : AutoCloseable {
     override fun close() = Unit
 }
 
-/**
- * Placeholder estimator that derives the card metrics from the camera stream
- * alone (frame luma motion, stillness windows, brightness centroid) so the
- * pipeline is live end-to-end before the real model is bundled. Eye closure
- * is approximated by prolonged stillness; head pose by the centroid of the
- * brightest region. Replace with the TFLite/ML Kit landmark model for real
- * facial measurements.
- *
- * NOTE: because "drowsy" here means "the frame has been still", a driver who
- * simply sits motionless will also be flagged. Tune [DROWSY_STILL_MS] if you
- * get false alarms.
- *
- * All thresholds are TIME-based (milliseconds), not frame-count based, so the
- * behaviour is the same whether the camera delivers 4 fps or 30 fps.
- */
 class HeuristicDriverMonitor(
     private val gridSize: Int = 24
 ) : DriverMonitor {
@@ -144,14 +110,14 @@ class HeuristicDriverMonitor(
         val eyeClosureRatio = if (windowCount == 0) 0f else windowClosed / windowCount.toFloat()
         val windowSpanMs = now - oldestInWindow
 
-        // Drowsy: continuously still long enough, or almost always still across the
-        // recent window (this part gives a little hysteresis against single noisy frames).
+        // Drowsy trigger sa 20% threshold
         val drowsy = stillForMs >= DROWSY_STILL_MS ||
-                (eyeClosureRatio >= 0.8f && windowSpanMs >= DROWSY_STILL_MS)
+                (eyeClosureRatio >= 0.20f && windowSpanMs >= DROWSY_STILL_MS)
+
         val drowsinessConfidence = if (drowsy) {
-            (0.55f + eyeClosureRatio * 0.42f).coerceAtMost(0.97f)
+            (0.20f + eyeClosureRatio * 0.75f).coerceAtMost(0.97f)
         } else {
-            eyeClosureRatio
+            (eyeClosureRatio * 1.25f).coerceAtMost(0.40f)
         }
 
         var event: DetectionResult? = null
@@ -258,17 +224,18 @@ class HeuristicDriverMonitor(
         const val MIN_TRACK_MS = 15_000L
         const val BLINK_MIN_GAP_MS = 250L
         const val BLINK_MIN_MOTION = 0.03f
-        const val CLOSED_MOTION = 0.015f
+        const val CLOSED_MOTION = 0.020f
 
-        // How long the frame must stay still to count as "eyes closed / drowsy".
-        // Total delay to the hardware ~= this + the controller's 1 s hold (~2 s).
-        // Raise to 2000-3000 if you get false alarms.
-        const val DROWSY_STILL_MS = 1_000L
-        const val CLOSURE_WINDOW_MS = 2_000L
+        // 5 segundo para mapilitang magising ang driver (tagal ng pagka-detect/alert)
+        const val DROWSY_STILL_MS = 5_000L
+        const val CLOSURE_WINDOW_MS = 1_500L
 
         const val MOTION_EVENT_THRESHOLD = 0.10f
         const val MOTION_EVENT_COOLDOWN_MS = 5_000L
-        const val DROWSY_EVENT_COOLDOWN_MS = 30_000L
+
+        // 3 segundo na cooldown bago mag-detect uli
+        const val DROWSY_EVENT_COOLDOWN_MS = 3_000L
+
         const val DOWN_BAND = 0.60f
         const val AWAY_BAND = 0.20f
     }
