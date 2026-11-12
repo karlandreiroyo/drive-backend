@@ -193,7 +193,9 @@ fun LiveFeedScreen(
     val onMonitorFrame: (DriverMonitorFrame) -> Unit = { frame ->
         detectionViewModel.onMonitorFrame(frame)
         if (detectionViewModel.sessionState.value == DrivingSessionState.Active) {
-            alertController.onReading(frame.drowsy, alertScope)
+            // Pinasama natin ang head pose o motion para mag-trigger din ang hardware
+            val isAlertTriggered = frame.drowsy || (lastEvent != null)
+            alertController.onReading(isAlertTriggered, alertScope)
         }
     }
 
