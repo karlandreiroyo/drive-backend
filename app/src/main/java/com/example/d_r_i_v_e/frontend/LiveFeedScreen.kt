@@ -247,6 +247,8 @@ fun LiveFeedScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
+                    PiCameraPanel(isDrivingActive = isDrivingActive)
+
                     // Camera preview: takes ALL remaining vertical space.
                     Box(
                         modifier = Modifier
