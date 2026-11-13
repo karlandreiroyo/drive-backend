@@ -2,6 +2,7 @@ package com.example.d_r_i_v_e.backend
 
 import android.content.Context
 import android.util.Log
+import com.example.d_r_i_v_e.DriveApplication
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -38,6 +39,7 @@ internal object PiCameraService {
     private val commandMutex = Mutex()
 
     private val client = OkHttpClient.Builder()
+        .socketFactory(WifiSocketFactory(DriveApplication.instance))
         .connectTimeout(3, TimeUnit.SECONDS)
         .readTimeout(3, TimeUnit.SECONDS)
         .writeTimeout(3, TimeUnit.SECONDS)

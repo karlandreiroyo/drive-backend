@@ -1,6 +1,7 @@
 package com.example.d_r_i_v_e.backend
 
 import android.util.Log
+import com.example.d_r_i_v_e.DriveApplication
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,6 +43,7 @@ class Esp32AlertController(
 
     private val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
+            .socketFactory(WifiSocketFactory(DriveApplication.instance))
             .connectTimeout(REQUEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .readTimeout(REQUEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .writeTimeout(REQUEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)

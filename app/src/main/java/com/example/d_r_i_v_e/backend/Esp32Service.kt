@@ -40,6 +40,7 @@ object Esp32Service {
     // Health check client: 2 s
     private val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
+            .socketFactory(WifiSocketFactory(DriveApplication.instance))
             .connectTimeout(2, TimeUnit.SECONDS)
             .readTimeout(2, TimeUnit.SECONDS)
             .writeTimeout(2, TimeUnit.SECONDS)
