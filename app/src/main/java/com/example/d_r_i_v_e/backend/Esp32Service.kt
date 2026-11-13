@@ -32,7 +32,7 @@ object Esp32Service {
     private const val TAG = "Esp32Service"
     private const val PREFS_NAME = "esp32_preferences"
     private const val KEY_BASE_URL = "esp32_base_url"
-    const val DEFAULT_BASE_URL = "http://10.188.151.218"
+    const val DEFAULT_BASE_URL = "http://10.42.0.47"
 
     /** Last known alert state as seen by sendAlert()/sendClear(). */
     val isAlertActive = AtomicBoolean(false)

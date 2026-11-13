@@ -85,7 +85,14 @@ internal fun PiCameraPanel(isDrivingActive: Boolean) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text("Raspberry Pi camera", color = Color.White, fontSize = 13.sp)
+            Column {
+                Text("Raspberry Pi camera", color = Color.White, fontSize = 13.sp)
+                Text(
+                    text = if (enabled) "Toggle OFF to hide" else "Toggle ON to connect & stream",
+                    color = Color.Gray,
+                    fontSize = 10.sp
+                )
+            }
             Switch(checked = enabled, onCheckedChange = { enabled = it })
         }
         if (enabled) {
