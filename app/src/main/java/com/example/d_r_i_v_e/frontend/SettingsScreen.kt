@@ -68,7 +68,7 @@ fun SettingsScreen(
                 .windowInsetsPadding(WindowInsets.systemBars)
         ) {
 
-            // Header row: Settings title + Log out button
+            // Header row: Settings title only
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -82,24 +82,6 @@ fun SettingsScreen(
                     fontSize = 24.sp,
                     fontWeight = FontWeight.Bold
                 )
-
-                Button(
-                    onClick = { showLogoutDialog = true },
-                    shape = RoundedCornerShape(20.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFD32F2F),
-                        contentColor = Color.White
-                    ),
-                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp),
-                    modifier = Modifier.height(36.dp)
-                ) {
-                    Text(
-                        text = "Log out",
-                        color = Color.White,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
             }
 
             // Content fills the space above the anchored bottom navigation
@@ -161,14 +143,6 @@ fun SettingsScreen(
                         .background(Color(0xFF4A4A4C))
                 ) {
                     SettingsMenuItem(
-                        icon = Icons.Filled.Wifi,
-                        label = "ESP32 Wi-Fi Settings",
-                        onClick = {
-                            esp32UrlInput = Esp32Service.getBaseUrl(context)
-                            showEsp32Dialog = true
-                        }
-                    )
-                    SettingsMenuItem(
                         icon = Icons.Filled.Person,
                         label = "Account & Profile",
                         onClick = onAccountProfileClick
@@ -197,6 +171,28 @@ fun SettingsScreen(
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
+
+                // Full-width Log out button
+                Button(
+                    onClick = { showLogoutDialog = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    shape = RoundedCornerShape(28.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFD32F2F),
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text(
+                        text = "Log out",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
             }
 
             SharedBottomNav(
@@ -208,55 +204,33 @@ fun SettingsScreen(
             )
         }
 
+        // Logout confirmation dialog
         if (showLogoutDialog) {
             AlertDialog(
                 onDismissRequest = { showLogoutDialog = false },
                 title = {
-                    Text(
-                        text = "Log Out",
-                        color = Color.White,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text(text = "Log out", color = Color.White, fontWeight = FontWeight.Bold)
                 },
                 text = {
                     Text(
-                        text = "Are you sure you want to log out of your account?",
-                        color = Color.White.copy(alpha = 0.8f),
-                        fontSize = 14.sp
+                        text = "Are you sure you want to log out?",
+                        color = Color.White.copy(alpha = 0.8f)
                     )
                 },
                 confirmButton = {
-                    TextButton(
-                        onClick = {
-                            showLogoutDialog = false
-                            onLogoutClick()
-                        },
-                        colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFFF4C4C))
-                    ) {
-                        Text(
-                            text = "Log out",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                    TextButton(onClick = {
+                        showLogoutDialog = false
+                        onLogoutClick()
+                    }) {
+                        Text(text = "Log out", color = Color(0xFFD32F2F), fontWeight = FontWeight.SemiBold)
                     }
                 },
                 dismissButton = {
-                    TextButton(
-                        onClick = { showLogoutDialog = false },
-                        colors = ButtonDefaults.textButtonColors(contentColor = Color.White.copy(alpha = 0.8f))
-                    ) {
-                        Text(
-                            text = "Cancel",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                    TextButton(onClick = { showLogoutDialog = false }) {
+                        Text(text = "Cancel", color = Color.White.copy(alpha = 0.7f))
                     }
                 },
-                containerColor = Color(0xFF2C2C2E),
-                titleContentColor = Color.White,
-                textContentColor = Color.White.copy(alpha = 0.8f),
-                shape = RoundedCornerShape(20.dp)
+                containerColor = Color(0xFF1C1C1E)
             )
         }
 
@@ -265,67 +239,37 @@ fun SettingsScreen(
             AlertDialog(
                 onDismissRequest = { showEsp32Dialog = false },
                 title = {
-                    Text(
-                        text = "ESP32 Wi-Fi Address",
-                        color = Color.White,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text(text = "ESP32 URL", color = Color.White, fontWeight = FontWeight.Bold)
                 },
                 text = {
-                    Column {
-                        Text(
-                            text = "Enter the IP or hostname of your ESP32 on the local Wi-Fi network. Example: http://10.188.151.218",
-                            color = Color.White.copy(alpha = 0.75f),
-                            fontSize = 13.sp
+                    OutlinedTextField(
+                        value = esp32UrlInput,
+                        onValueChange = { esp32UrlInput = it },
+                        label = { Text("Base URL", color = Color.White.copy(alpha = 0.6f)) },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = Color(0xFF4CD964),
+                            unfocusedBorderColor = Color.White.copy(alpha = 0.3f),
+                            cursorColor = Color(0xFF4CD964)
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        OutlinedTextField(
-                            value = esp32UrlInput,
-                            onValueChange = { esp32UrlInput = it },
-                            label = { Text("Base URL", color = Color.White.copy(alpha = 0.6f)) },
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White,
-                                focusedBorderColor = Color(0xFF4CD964),
-                                unfocusedBorderColor = Color.White.copy(alpha = 0.3f),
-                                cursorColor = Color(0xFF4CD964)
-                            )
-                        )
-                    }
+                    )
                 },
                 confirmButton = {
-                    TextButton(
-                        onClick = {
-                            Esp32Service.setBaseUrl(context, esp32UrlInput)
-                            showEsp32Dialog = false
-                        },
-                        colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFF4CD964))
-                    ) {
-                        Text(
-                            text = "Save",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                    TextButton(onClick = {
+                        Esp32Service.setBaseUrl(context, esp32UrlInput.trim())
+                        showEsp32Dialog = false
+                    }) {
+                        Text(text = "Save", color = Color(0xFF4CD964), fontWeight = FontWeight.SemiBold)
                     }
                 },
                 dismissButton = {
-                    TextButton(
-                        onClick = { showEsp32Dialog = false },
-                        colors = ButtonDefaults.textButtonColors(contentColor = Color.White.copy(alpha = 0.8f))
-                    ) {
-                        Text(
-                            text = "Cancel",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                    TextButton(onClick = { showEsp32Dialog = false }) {
+                        Text(text = "Cancel", color = Color.White.copy(alpha = 0.7f))
                     }
                 },
-                containerColor = Color(0xFF2C2C2E),
-                titleContentColor = Color.White,
-                textContentColor = Color.White.copy(alpha = 0.8f),
-                shape = RoundedCornerShape(20.dp)
+                containerColor = Color(0xFF1C1C1E)
             )
         }
     }
@@ -342,37 +286,37 @@ private fun SettingsMenuItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { onClick() }
+                .clickable(onClick = onClick)
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 imageVector = icon,
-                contentDescription = null,
-                tint = Color.White.copy(alpha = 0.7f),
-                modifier = Modifier.size(20.dp)
+                contentDescription = label,
+                tint = Color.White.copy(alpha = 0.85f),
+                modifier = Modifier.size(22.dp)
             )
             Spacer(modifier = Modifier.width(14.dp))
             Text(
                 text = label,
                 color = Color.White,
-                fontSize = 14.sp,
+                fontSize = 15.sp,
                 modifier = Modifier.weight(1f)
             )
             Icon(
                 imageVector = Icons.Filled.ChevronRight,
                 contentDescription = null,
                 tint = Color.White.copy(alpha = 0.4f),
-                modifier = Modifier.size(18.dp)
+                modifier = Modifier.size(20.dp)
             )
         }
         if (showDivider) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .padding(start = 52.dp)
                     .height(1.dp)
                     .background(Color.White.copy(alpha = 0.08f))
-                    .padding(horizontal = 16.dp)
             )
         }
     }

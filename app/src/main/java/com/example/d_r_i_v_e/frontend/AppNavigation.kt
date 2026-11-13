@@ -350,6 +350,15 @@ fun AppNavigation() {
         "accountProfile" -> AccountProfileScreen(
             driverName = AuthSession.user?.fullName ?: "Driver",
             onBackClick = { goBack() },
+            onProfileRowClick = { navigateTo("editProfile") },
+            onTabDashboardClick = { navigateTo("dashboard") },
+            onTabCameraClick = { navigateTo("liveFeed") },
+            onTabMapClick = { navigateTo("tripHistory") },
+            onTabSettingsClick = { navigateTo("settings") }
+        )
+
+        "editProfile" -> EditProfileScreen(
+            onBackClick = { goBack() },
             onTabDashboardClick = { navigateTo("dashboard") },
             onTabCameraClick = { navigateTo("liveFeed") },
             onTabMapClick = { navigateTo("tripHistory") },

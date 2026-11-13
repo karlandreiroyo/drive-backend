@@ -15,9 +15,9 @@ import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -43,6 +43,7 @@ import kotlinx.coroutines.delay
 fun DashboardScreen(
     isHardwareConnected: Boolean = false,
     isOnline: Boolean = false,
+    isMicroSleepDetected: Boolean = false,
     tripDuration: String = "--",
     receivedAlerts: String = "--",
     welcomeName: String? = null,
@@ -65,6 +66,11 @@ fun DashboardScreen(
             onWelcomeDismissed()
         }
     }
+
+    // Dynamic colors for the readings card
+    val cardBgColor = if (isMicroSleepDetected) Color(0xFF2B0A0A) else Color(0xFF0A2E1A)
+    val cardBorderColor = if (isMicroSleepDetected) Color(0xFFD32F2F) else Color(0xFF4CD964)
+    val cardIconColor = if (isMicroSleepDetected) Color(0xFFD32F2F) else Color(0xFF4CD964)
 
     Box(
         modifier = Modifier
@@ -139,41 +145,45 @@ fun DashboardScreen(
 
                     Spacer(modifier = Modifier.height(20.dp))
 
-                    // Profile / readings card flexes to fill the remaining height
+                    // Readings card — Alert or Micro-Sleep state
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
                             .clip(RoundedCornerShape(16.dp))
-                            .background(Color(0xFF4A4A4C))
+                            .background(cardBgColor)
+                            .border(1.dp, cardBorderColor, RoundedCornerShape(16.dp))
                             .padding(vertical = 16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
 
-                        Box(
-                            modifier = Modifier
-                                .size(80.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF2C2C2E)),
-                            contentAlignment = Alignment.Center
-                        ) {
-
-                            Icon(
-                                imageVector = Icons.Filled.Person,
-                                contentDescription = "Profile",
-                                tint = Color.White.copy(alpha = 0.6f),
-                                modifier = Modifier.size(44.dp)
-                            )
-                        }
+                        Icon(
+                            imageVector = if (isMicroSleepDetected) Icons.Filled.Warning else Icons.Filled.CheckCircle,
+                            contentDescription = if (isMicroSleepDetected) "Micro-sleep detected" else "Alert",
+                            tint = cardIconColor,
+                            modifier = Modifier.size(56.dp)
+                        )
 
                         Spacer(modifier = Modifier.height(12.dp))
 
                         Text(
-                            text = "Readings Unavailable",
+                            text = if (isMicroSleepDetected) "MICRO-SLEEP DETECTED" else "Alert",
                             color = Color.White,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold
+                            fontSize = if (isMicroSleepDetected) 20.sp else 22.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Text(
+                            text = if (isMicroSleepDetected)
+                                "PLEASE WAKE UP AND PULL OVER YOUR VEHICLE"
+                            else
+                                "Driver Attention Optimal.",
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
                         )
                     }
 
@@ -252,7 +262,7 @@ fun DashboardScreen(
 
                     Spacer(modifier = Modifier.height(24.dp))
 
-                    // Start Driving Session button
+                    // End Driving Session button
                     Button(
                         onClick = onStartDrivingClick,
                         modifier = Modifier
@@ -265,7 +275,7 @@ fun DashboardScreen(
                     ) {
 
                         Icon(
-                            imageVector = Icons.Filled.PlayArrow,
+                            imageVector = Icons.Filled.Stop,
                             contentDescription = null,
                             tint = Color.White,
                             modifier = Modifier.size(20.dp)
@@ -274,7 +284,7 @@ fun DashboardScreen(
                         Spacer(modifier = Modifier.width(8.dp))
 
                         Text(
-                            text = "Start Driving Session",
+                            text = "End Driving Session",
                             color = Color.White,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.SemiBold

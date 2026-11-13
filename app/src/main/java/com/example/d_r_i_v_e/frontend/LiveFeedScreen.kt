@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
@@ -227,7 +226,6 @@ fun LiveFeedScreen(
                     // Header Row (compact)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
@@ -235,13 +233,6 @@ fun LiveFeedScreen(
                             color = Color.White,
                             fontSize = 18.sp,
                             fontWeight = FontWeight.Bold
-                        )
-
-                        Icon(
-                            imageVector = Icons.Filled.Notifications,
-                            contentDescription = "Notification",
-                            tint = Color.White,
-                            modifier = Modifier.size(22.dp)
                         )
                     }
 
