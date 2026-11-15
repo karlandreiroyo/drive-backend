@@ -31,14 +31,17 @@ interface TripDao {
 
     @Query(
         "SELECT * FROM trips WHERE user_id = :userId AND is_synced = 0 AND is_deleted = 0 " +
-            "ORDER BY start_time ASC"
+            "AND status != 'ARCHIVED' ORDER BY start_time ASC"
     )
     suspend fun unsyncedTrips(userId: String): List<TripEntity>
 
     @Query("SELECT * FROM trips WHERE user_id = :userId AND is_deleted = 1")
     suspend fun pendingDeletes(userId: String): List<TripEntity>
 
-    @Query("SELECT id FROM trips WHERE user_id = :userId AND (is_synced = 0 OR is_deleted = 1)")
+    @Query(
+        "SELECT id FROM trips WHERE user_id = :userId " +
+            "AND (is_synced = 0 OR is_deleted = 1 OR status = 'ARCHIVED')"
+    )
     suspend fun locallyPendingTripIds(userId: String): List<String>
 
     @Query("UPDATE trips SET is_synced = 1 WHERE id IN (:tripIds)")
@@ -47,13 +50,28 @@ interface TripDao {
     @Query("UPDATE trips SET is_deleted = 1 WHERE id = :tripId")
     suspend fun markDeleted(tripId: String)
 
+    /** Moves a completed trip into the local archive without deleting it. */
+    @Query("UPDATE trips SET status = 'ARCHIVED' WHERE id = :tripId")
+    suspend fun archive(tripId: String)
+
+    /** Returns an archived trip to Trip History so it surfaces there again. */
+    @Query("UPDATE trips SET status = 'COMPLETED' WHERE id = :tripId")
+    suspend fun restore(tripId: String)
+
     @Query("DELETE FROM trips WHERE id IN (:tripIds)")
     suspend fun deleteByIds(tripIds: List<String>)
 
     @Transaction
     @Query(
         "SELECT * FROM trips WHERE user_id = :userId AND status != 'IN_PROGRESS' " +
-            "AND is_deleted = 0 ORDER BY start_time DESC"
+            "AND status != 'ARCHIVED' AND is_deleted = 0 ORDER BY start_time DESC"
     )
     fun observeHistory(userId: String): Flow<List<TripWithIncidents>>
+
+    @Transaction
+    @Query(
+        "SELECT * FROM trips WHERE user_id = :userId AND status = 'ARCHIVED' " +
+            "AND is_deleted = 0 ORDER BY start_time DESC"
+    )
+    fun observeArchived(userId: String): Flow<List<TripWithIncidents>>
 }

@@ -47,6 +47,9 @@ class DriveRepository internal constructor(
     fun observeHistory(userId: String): Flow<List<TripWithIncidents>> =
         tripDao.observeHistory(userId)
 
+    fun observeArchived(userId: String): Flow<List<TripWithIncidents>> =
+        tripDao.observeArchived(userId)
+
     suspend fun startTrip(
         userId: String,
         startedAt: Long = System.currentTimeMillis()
@@ -230,6 +233,19 @@ class DriveRepository internal constructor(
         }
     }
 
+    /** Moves a completed trip out of Trip History into the local archive. */
+    suspend fun archiveTrip(tripId: String) = writeMutex.withLock {
+        if (tripDao.findById(tripId) == null) return@withLock
+        tripDao.archive(tripId)
+    }
+
+    /** Returns an archived trip to Trip History. */
+    suspend fun restoreTrip(tripId: String) = writeMutex.withLock {
+        if (tripDao.findById(tripId) == null) return@withLock
+        tripDao.restore(tripId)
+    }
+
+    /** Permanently deletes a trip (e.g. from the archive) and queues a remote delete. */
     suspend fun deleteTrip(tripId: String) = writeMutex.withLock {
         if (tripDao.findById(tripId) == null) return@withLock
         tripDao.markDeleted(tripId)

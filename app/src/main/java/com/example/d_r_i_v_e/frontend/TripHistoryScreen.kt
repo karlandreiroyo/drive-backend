@@ -65,6 +65,7 @@ fun TripHistoryScreen(
     val startedAt = sessionStartedAt
     val elapsedSeconds = startedAt?.let { ((now - it) / 1_000).coerceAtLeast(0) } ?: 0L
     val sessionIncidentCount = liveIncidentCount
+    var pendingDeleteTripId by remember { mutableStateOf<String?>(null) }
 
     Box(
         modifier = Modifier
@@ -113,7 +114,7 @@ fun TripHistoryScreen(
                 state.trips.forEach { trip ->
                     TripCard(
                         trip = trip,
-                        onDeleteClick = { historyViewModel.deleteTrip(trip.id) }
+                        onDeleteClick = { pendingDeleteTripId = trip.id }
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                 }
@@ -132,6 +133,19 @@ fun TripHistoryScreen(
                 onTabCameraClick = onTabCameraClick,
                 onTabMapClick = onTabMapClick,
                 onTabSettingsClick = onTabSettingsClick
+            )
+        }
+
+        pendingDeleteTripId?.let { tripId ->
+            ConfirmationDialog(
+                title = "Clear Trip History data?",
+                message = "This removes your existing report about your drowsiness, and will be archived.",
+                confirmLabel = "Clear Data",
+                onConfirm = {
+                    pendingDeleteTripId = null
+                    historyViewModel.archiveTrip(tripId)
+                },
+                onDismiss = { pendingDeleteTripId = null }
             )
         }
     }

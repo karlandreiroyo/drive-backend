@@ -1,5 +1,10 @@
 package com.example.d_r_i_v_e.frontend
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -15,17 +20,22 @@ import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -34,26 +44,75 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
+import com.example.d_r_i_v_e.backend.routes.DrivingSessionState
+import com.example.d_r_i_v_e.backend.routes.LocalLogStatus
 import kotlinx.coroutines.delay
+
+private enum class DashboardReading { Unavailable, Calibrating, Alert, MicroSleep }
 
 @Composable
 fun DashboardScreen(
     isHardwareConnected: Boolean = false,
-    isOnline: Boolean = false,
-    isMicroSleepDetected: Boolean = false,
-    tripDuration: String = "--",
-    receivedAlerts: String = "--",
     welcomeName: String? = null,
     onWelcomeDismissed: () -> Unit = {},
-    onStartDrivingClick: () -> Unit,
     onTabDashboardClick: () -> Unit = {},
     onTabCameraClick: () -> Unit = {},
     onTabMapClick: () -> Unit = {},
     onTabSettingsClick: () -> Unit = {}
 ) {
+    val context = LocalContext.current
+    val detectionViewModel: DetectionViewModel = viewModel()
+    val sessionState by detectionViewModel.sessionState.collectAsState()
+    val sessionStartedAt by detectionViewModel.sessionStartedAt.collectAsState()
+    val monitorFrame by detectionViewModel.monitorFrame.collectAsState()
+    val detectionCount by detectionViewModel.sessionDetectionCount.collectAsState()
+    val logStatus by detectionViewModel.logStatus.collectAsState()
+    val statusMessage by detectionViewModel.statusMessage.collectAsState()
+    val isDrivingActive = sessionState == DrivingSessionState.Active
+    val isSessionBusy = sessionState == DrivingSessionState.Starting ||
+            sessionState == DrivingSessionState.Stopping
+    val isOnline = isDrivingActive
+
+    var elapsedSeconds by remember { mutableLongStateOf(0L) }
+    var permissionRequestInFlight by remember { mutableStateOf(false) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        permissionRequestInFlight = false
+        if (granted) {
+            detectionViewModel.startSession()
+        } else {
+            Toast.makeText(context, "Camera permission is required to start monitoring.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    LaunchedEffect(isDrivingActive, sessionStartedAt) {
+        elapsedSeconds = 0L
+        val startedAt = sessionStartedAt ?: return@LaunchedEffect
+        if (isDrivingActive) {
+            while (true) {
+                elapsedSeconds = ((System.currentTimeMillis() - startedAt) / 1_000).coerceAtLeast(0L)
+                delay(1_000)
+            }
+        }
+    }
+
+    val reading = when {
+        !isDrivingActive -> DashboardReading.Unavailable
+        monitorFrame == null -> DashboardReading.Calibrating
+        monitorFrame?.drowsy == true -> DashboardReading.MicroSleep
+        else -> DashboardReading.Alert
+    }
+
     var showWelcomeBanner by remember { mutableStateOf(welcomeName != null) }
     var bannerName by remember { mutableStateOf(welcomeName.orEmpty()) }
 
@@ -66,11 +125,6 @@ fun DashboardScreen(
             onWelcomeDismissed()
         }
     }
-
-    // Dynamic colors for the readings card
-    val cardBgColor = if (isMicroSleepDetected) Color(0xFF2B0A0A) else Color(0xFF0A2E1A)
-    val cardBorderColor = if (isMicroSleepDetected) Color(0xFFD32F2F) else Color(0xFF4CD964)
-    val cardIconColor = if (isMicroSleepDetected) Color(0xFFD32F2F) else Color(0xFF4CD964)
 
     Box(
         modifier = Modifier
@@ -145,47 +199,13 @@ fun DashboardScreen(
 
                     Spacer(modifier = Modifier.height(20.dp))
 
-                    // Readings card — Alert or Micro-Sleep state
-                    Column(
+                    // Readings card — default until the session's camera/ML reports a frame
+                    ReadingsCard(
+                        reading = reading,
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(cardBgColor)
-                            .border(1.dp, cardBorderColor, RoundedCornerShape(16.dp))
-                            .padding(vertical = 16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-
-                        Icon(
-                            imageVector = if (isMicroSleepDetected) Icons.Filled.Warning else Icons.Filled.CheckCircle,
-                            contentDescription = if (isMicroSleepDetected) "Micro-sleep detected" else "Alert",
-                            tint = cardIconColor,
-                            modifier = Modifier.size(56.dp)
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Text(
-                            text = if (isMicroSleepDetected) "MICRO-SLEEP DETECTED" else "Alert",
-                            color = Color.White,
-                            fontSize = if (isMicroSleepDetected) 20.sp else 22.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-
-                        Spacer(modifier = Modifier.height(6.dp))
-
-                        Text(
-                            text = if (isMicroSleepDetected)
-                                "PLEASE WAKE UP AND PULL OVER YOUR VEHICLE"
-                            else
-                                "Driver Attention Optimal.",
-                            color = Color.White.copy(alpha = 0.7f),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
+                    )
 
                     Spacer(modifier = Modifier.height(16.dp))
 
@@ -198,14 +218,14 @@ fun DashboardScreen(
                         InfoCard(
                             icon = Icons.Filled.Schedule,
                             label = "Trip Duration:",
-                            value = tripDuration,
+                            value = if (isDrivingActive) formatTripDuration(elapsedSeconds) else "--",
                             modifier = Modifier.weight(1f)
                         )
 
                         InfoCard(
                             icon = Icons.Filled.Notifications,
                             label = "Received Alerts:",
-                            value = receivedAlerts,
+                            value = if (isDrivingActive) detectionCount.toString() else "--",
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -262,9 +282,24 @@ fun DashboardScreen(
 
                     Spacer(modifier = Modifier.height(24.dp))
 
-                    // End Driving Session button
+                    // Start / End Driving Session button
                     Button(
-                        onClick = onStartDrivingClick,
+                        onClick = {
+                            if (isDrivingActive) {
+                                detectionViewModel.finishSession { message ->
+                                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                }
+                            } else if (
+                                ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                                PackageManager.PERMISSION_GRANTED
+                            ) {
+                                detectionViewModel.startSession()
+                            } else {
+                                permissionRequestInFlight = true
+                                permissionLauncher.launch(Manifest.permission.CAMERA)
+                            }
+                        },
+                        enabled = !isSessionBusy && !permissionRequestInFlight,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp),
@@ -275,7 +310,7 @@ fun DashboardScreen(
                     ) {
 
                         Icon(
-                            imageVector = Icons.Filled.Stop,
+                            imageVector = if (isDrivingActive) Icons.Filled.Stop else Icons.Filled.PlayArrow,
                             contentDescription = null,
                             tint = Color.White,
                             modifier = Modifier.size(20.dp)
@@ -284,10 +319,28 @@ fun DashboardScreen(
                         Spacer(modifier = Modifier.width(8.dp))
 
                         Text(
-                            text = "End Driving Session",
+                            text = when {
+                                permissionRequestInFlight -> "Waiting for camera permission…"
+                                sessionState == DrivingSessionState.Starting -> "Starting Driving Session…"
+                                sessionState == DrivingSessionState.Stopping -> "Saving Trip…"
+                                isDrivingActive -> "End Driving Session"
+                                else -> "Start Driving Session"
+                            },
                             color = Color.White,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    val failureMessage = statusMessage
+                    if (logStatus == LocalLogStatus.Failed && failureMessage != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = failureMessage,
+                            color = Color(0xFFFF6B6B),
+                            fontSize = 12.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
 
@@ -365,6 +418,100 @@ fun DashboardScreen(
                         modifier = Modifier.size(18.dp)
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReadingsCard(reading: DashboardReading, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(16.dp)
+    val (background, border) = when (reading) {
+        DashboardReading.Alert -> Color(0xFF0A2E1A) to Color(0xFF4CD964)
+        DashboardReading.MicroSleep -> Color(0xFF2B0A0A) to Color(0xFFD32F2F)
+        else -> Color(0xFF4A4A4C) to Color.Transparent
+    }
+
+    Column(
+        modifier = modifier
+            .clip(shape)
+            .background(background)
+            .border(1.dp, border, shape)
+            .padding(vertical = 16.dp, horizontal = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        when (reading) {
+            DashboardReading.Unavailable, DashboardReading.Calibrating -> {
+                Box(
+                    modifier = Modifier
+                        .size(80.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF2C2C2E)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (reading == DashboardReading.Calibrating) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(40.dp),
+                            color = Color.White.copy(alpha = 0.7f),
+                            strokeWidth = 3.dp
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Filled.Person,
+                            contentDescription = "Profile",
+                            tint = Color.White.copy(alpha = 0.6f),
+                            modifier = Modifier.size(44.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = if (reading == DashboardReading.Calibrating) "Calibrating…" else "Readings Unavailable",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+
+                if (reading == DashboardReading.Calibrating) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Keep your face in view of the camera.",
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 12.sp
+                    )
+                }
+            }
+
+            DashboardReading.Alert, DashboardReading.MicroSleep -> {
+                val isMicroSleep = reading == DashboardReading.MicroSleep
+                Icon(
+                    imageVector = if (isMicroSleep) Icons.Filled.Warning else Icons.Filled.CheckCircle,
+                    contentDescription = if (isMicroSleep) "Micro-sleep detected" else "Alert",
+                    tint = border,
+                    modifier = Modifier.size(56.dp)
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = if (isMicroSleep) "MICRO-SLEEP DETECTED" else "Alert",
+                    color = Color.White,
+                    fontSize = if (isMicroSleep) 20.sp else 22.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Text(
+                    text = if (isMicroSleep) "PLEASE WAKE UP AND PULL OVER YOUR VEHICLE" else "Driver Attention Optimal.",
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Center
+                )
             }
         }
     }

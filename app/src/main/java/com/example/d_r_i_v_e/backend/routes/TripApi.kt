@@ -21,7 +21,8 @@ import java.util.Locale
 
 data class TripHistoryUiState(
     val isLoading: Boolean = true,
-    val trips: List<TripEntry> = emptyList()
+    val trips: List<TripEntry> = emptyList(),
+    val archivedTrips: List<TripEntry> = emptyList()
 )
 
 /**
@@ -35,6 +36,7 @@ class TripHistoryViewModel(application: Application) : AndroidViewModel(applicat
     val state: StateFlow<TripHistoryUiState> = _state.asStateFlow()
 
     private var observeJob: Job? = null
+    private var archiveObserveJob: Job? = null
     private var observingUserId: String? = null
 
     fun refresh() {
@@ -47,13 +49,20 @@ class TripHistoryViewModel(application: Application) : AndroidViewModel(applicat
         if (userId != observingUserId || observeJob?.isActive != true) {
             observingUserId = userId
             observeJob?.cancel()
+            archiveObserveJob?.cancel()
             _state.value = TripHistoryUiState(isLoading = true)
             observeJob = viewModelScope.launch {
                 repository.observeHistory(userId).collect { rows ->
-                    _state.value = TripHistoryUiState(
-                        isLoading = false,
-                        trips = rows.map { it.toTripEntry() }
-                    )
+                    _state.update { state ->
+                        state.copy(isLoading = false, trips = rows.map { it.toTripEntry() })
+                    }
+                }
+            }
+            archiveObserveJob = viewModelScope.launch {
+                repository.observeArchived(userId).collect { rows ->
+                    _state.update { state ->
+                        state.copy(archivedTrips = rows.map { it.toTripEntry() })
+                    }
                 }
             }
         }
@@ -67,19 +76,45 @@ class TripHistoryViewModel(application: Application) : AndroidViewModel(applicat
         repository.requestSync()
     }
 
-    fun deleteTrip(tripId: String) {
+    /** Archives a trip from Trip History so it moves to the Archive instead of being deleted. */
+    fun archiveTrip(tripId: String) {
         _state.update { state ->
             state.copy(trips = state.trips.filterNot { it.id == tripId })
         }
         viewModelScope.launch {
+            runCatching { repository.archiveTrip(tripId) }
+                .onFailure { Log.w(TAG, "Couldn't archive trip $tripId", it) }
+        }
+    }
+
+    /** Restores an archived trip so it returns to Trip History. */
+    fun restoreTrip(tripId: String, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            runCatching { repository.restoreTrip(tripId) }
+                .onSuccess { onResult(true) }
+                .onFailure { error ->
+                    Log.w(TAG, "Couldn't restore trip $tripId", error)
+                    onResult(false)
+                }
+        }
+    }
+
+    /** Permanently deletes a trip from the Archive. */
+    fun deleteArchivedTrip(tripId: String) {
+        _state.update { state ->
+            state.copy(archivedTrips = state.archivedTrips.filterNot { it.id == tripId })
+        }
+        viewModelScope.launch {
             runCatching { repository.deleteTrip(tripId) }
-                .onFailure { Log.w(TAG, "Couldn't delete trip $tripId", it) }
+                .onFailure { Log.w(TAG, "Couldn't delete archived trip $tripId", it) }
         }
     }
 
     fun clear() {
         observeJob?.cancel()
         observeJob = null
+        archiveObserveJob?.cancel()
+        archiveObserveJob = null
         observingUserId = null
         _state.value = TripHistoryUiState()
     }

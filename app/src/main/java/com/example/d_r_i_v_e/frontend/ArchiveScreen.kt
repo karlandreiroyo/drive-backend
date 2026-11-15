@@ -47,6 +47,8 @@ fun ArchiveScreen(
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("All") }
+    var pendingDeleteId by remember { mutableStateOf<String?>(null) }
+    var pendingRestoreId by remember { mutableStateOf<String?>(null) }
 
     val filteredEntries = entries.filter { entry ->
         val matchesSearch = entry.title.contains(searchQuery, ignoreCase = true)
@@ -168,8 +170,8 @@ fun ArchiveScreen(
                 filteredEntries.forEach { entry ->
                     ArchiveEntryCard(
                         entry = entry,
-                        onRestoreClick = { onRestoreEntry(entry.id) },
-                        onDeleteClick = { onDeleteEntry(entry.id) }
+                        onRestoreClick = { pendingRestoreId = entry.id },
+                        onDeleteClick = { pendingDeleteId = entry.id }
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                 }
@@ -182,6 +184,33 @@ fun ArchiveScreen(
                 onTabCameraClick = onTabCameraClick,
                 onTabMapClick = onTabMapClick,
                 onTabSettingsClick = onTabSettingsClick
+            )
+        }
+
+        pendingRestoreId?.let { entryId ->
+            ConfirmationDialog(
+                title = "Restore Drive Session?",
+                message = "This drive session will be returned to Trip History.",
+                confirmLabel = "Confirm Restore",
+                showWarningIcon = false,
+                onConfirm = {
+                    pendingRestoreId = null
+                    onRestoreEntry(entryId)
+                },
+                onDismiss = { pendingRestoreId = null }
+            )
+        }
+
+        pendingDeleteId?.let { entryId ->
+            ConfirmationDialog(
+                title = "Delete Archived Drive Session?",
+                message = "This will permanently delete your drive session.",
+                confirmLabel = "Delete",
+                onConfirm = {
+                    pendingDeleteId = null
+                    onDeleteEntry(entryId)
+                },
+                onDismiss = { pendingDeleteId = null }
             )
         }
     }

@@ -20,6 +20,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,6 +49,9 @@ fun AccountProfileScreen(
     onTabMapClick: () -> Unit = {},
     onTabSettingsClick: () -> Unit = {}
 ) {
+    var showDeleteAccountDialog by remember { mutableStateOf(false) }
+    var showClearFacialDataDialog by remember { mutableStateOf(false) }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -172,7 +179,7 @@ fun AccountProfileScreen(
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color(0xFF3A1414))
                         .border(1.dp, Color(0xFFFF5C5C), RoundedCornerShape(16.dp))
-                        .clickable { onDeleteAccountClick() }
+                        .clickable { showDeleteAccountDialog = true }
                         .padding(vertical = 16.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -209,7 +216,7 @@ fun AccountProfileScreen(
                     AccountMenuItem(
                         icon = Icons.Filled.Delete,
                         label = "Clear my facial calibration data",
-                        onClick = onClearFacialDataClick,
+                        onClick = { showClearFacialDataDialog = true },
                         showDivider = false
                     )
                 }
@@ -223,6 +230,32 @@ fun AccountProfileScreen(
                 onTabCameraClick = onTabCameraClick,
                 onTabMapClick = onTabMapClick,
                 onTabSettingsClick = onTabSettingsClick
+            )
+        }
+
+        if (showDeleteAccountDialog) {
+            ConfirmationDialog(
+                title = "Delete Account?",
+                message = "This will delete your account and all of its report, history, and data. Are you sure?",
+                confirmLabel = "Delete",
+                onConfirm = {
+                    showDeleteAccountDialog = false
+                    onDeleteAccountClick()
+                },
+                onDismiss = { showDeleteAccountDialog = false }
+            )
+        }
+
+        if (showClearFacialDataDialog) {
+            ConfirmationDialog(
+                title = "Clear facial calibration data?",
+                message = "This removes your saved facial calibration. You will need to recalibrate before your next drive.",
+                confirmLabel = "Clear Data",
+                onConfirm = {
+                    showClearFacialDataDialog = false
+                    onClearFacialDataClick()
+                },
+                onDismiss = { showClearFacialDataDialog = false }
             )
         }
     }

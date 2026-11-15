@@ -6,12 +6,7 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.camera.core.Camera
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.CameraState
-import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -46,33 +41,21 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.Observer
 import androidx.lifecycle.compose.LifecycleEventEffect
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.d_r_i_v_e.alerts.rememberLocalAlertManager
-import com.example.d_r_i_v_e.backend.Esp32AlertController
-import com.example.d_r_i_v_e.backend.Esp32Service
 import com.example.d_r_i_v_e.backend.routes.DetectionEvent
 import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
 import com.example.d_r_i_v_e.backend.routes.DrivingSessionState
 import com.example.d_r_i_v_e.backend.routes.HardwareStatus
 import com.example.d_r_i_v_e.backend.routes.LocalLogStatus
-import com.example.d_r_i_v_e.ml.DetectionAnalyzer
-import com.example.d_r_i_v_e.ml.DetectionResult
-import com.example.d_r_i_v_e.ml.DriverMonitorFrame
-import com.example.d_r_i_v_e.ml.HeuristicDriverMonitor
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import java.util.Locale
-import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
 
 @Composable
 fun LiveFeedScreen(
     hardwareStatus: HardwareStatus = HardwareStatus(),
+    isHardwareAlertActive: Boolean = false,
+    onPreviewSurfaceChanged: (Preview.SurfaceProvider?) -> Unit = {},
     onTabDashboardClick: () -> Unit = {},
     onTabCameraClick: () -> Unit = {},
     onTabMapClick: () -> Unit = {},
@@ -96,14 +79,6 @@ fun LiveFeedScreen(
     // Latest detection kept for the exit animation of the banner.
     var showAlert by remember { mutableStateOf(false) }
     var alertEvent by remember { mutableStateOf<DetectionEvent?>(null) }
-
-    val localAlertManager = rememberLocalAlertManager()
-
-    // ── ESP32 alert state machine (the ONLY place that calls /alert and /clear) ──
-    val alertController = remember { Esp32AlertController { Esp32Service.getBaseUrl(context) } }
-    // Own scope so a final /clear still runs when this screen leaves composition.
-    val alertScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
-    val isEsp32AlertActive by alertController.alertActive.collectAsState()
 
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -157,46 +132,7 @@ fun LiveFeedScreen(
         }
     }
 
-    // Session start: clean state (no network). Session end: turn hardware off if it is on.
-    LaunchedEffect(isDrivingActive) {
-        if (isDrivingActive) {
-            alertController.reset()
-        } else if (alertController.alertActive.value) {
-            alertController.forceStop(alertScope)
-        }
-    }
-
-    // Leaving the screen: make sure the buzzer/motors are not left running.
-    DisposableEffect(Unit) {
-        onDispose {
-            if (alertController.alertActive.value) {
-                alertController.forceStop(alertScope)
-            }
-        }
-    }
-
-    // Local tone/speech + incident saving. This does NOT touch the ESP32.
-    val onFrameDetection: (DetectionResult) -> Unit = { result ->
-        if (detectionViewModel.sessionState.value == DrivingSessionState.Active) {
-            runCatching {
-                localAlertManager.triggerDetectionAlert(result.label, result.confidence)
-            }.onFailure { Log.w("LiveFeedScreen", "Local audio alert failed: ${it.message}") }
-
-            // Independent of the ESP32 call
-            detectionViewModel.onDetection(result)
-        }
-    }
-
-    // Called on EVERY analyzed frame (drowsy or not) so the controller can time
-    // "drowsy >= 1 s" -> /alert and "awake >= 2 s" -> /clear, over and over.
-    val onMonitorFrame: (DriverMonitorFrame) -> Unit = { frame ->
-        detectionViewModel.onMonitorFrame(frame)
-        if (detectionViewModel.sessionState.value == DrivingSessionState.Active) {
-            // Pinasama natin ang head pose o motion para mag-trigger din ang hardware
-            val isAlertTriggered = frame.drowsy || (lastEvent != null)
-            alertController.onReading(isAlertTriggered, alertScope)
-        }
-    }
+    val pi = rememberPiCamera(isDrivingActive)
 
     Box(
         modifier = Modifier
@@ -238,7 +174,9 @@ fun LiveFeedScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    PiCameraPanel(isDrivingActive = isDrivingActive)
+                    PiCameraBar(handle = pi, isDrivingActive = isDrivingActive)
+
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     // Camera preview: takes ALL remaining vertical space.
                     Box(
@@ -251,9 +189,7 @@ fun LiveFeedScreen(
                     ) {
                         if (isDrivingActive && hasCameraPermission) {
                             CameraPreview(
-                                onFrame = onMonitorFrame,
-                                onEvent = onFrameDetection,
-                                onError = detectionViewModel::onCameraError,
+                                onSurfaceChanged = onPreviewSurfaceChanged,
                                 modifier = Modifier.fillMaxSize()
                             )
                             LiveBadge(
@@ -261,6 +197,14 @@ fun LiveFeedScreen(
                                     .align(Alignment.TopStart)
                                     .padding(10.dp)
                             )
+                            if (pi.enabled.value) {
+                                PiCameraPip(
+                                    handle = pi,
+                                    modifier = Modifier
+                                        .align(Alignment.TopStart)
+                                        .padding(start = 10.dp, top = 40.dp)
+                                )
+                            }
                         } else {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Icon(
@@ -371,7 +315,7 @@ fun LiveFeedScreen(
                                 isDrivingActive && monitorFrame == null -> "Session Active - Calibrating…"
                                 isDrivingActive && monitorFrame?.drowsy == true -> "Session Active - Drowsiness Detected"
                                 isDrivingActive -> "Session Active - Monitoring…"
-                                else -> "No Readings Unavailable"
+                                else -> "Readings Unavailable"
                             },
                             color = when {
                                 logStatus == LocalLogStatus.Failed || permissionDenied -> Color(0xFFFF6B6B)
@@ -388,7 +332,7 @@ fun LiveFeedScreen(
                     val hardwareNote = when {
                         !hardwareStatus.esp32Connected && hardwareStatus.message != null ->
                             hardwareStatus.message
-                        hardwareStatus.alertActive || isEsp32AlertActive ->
+                        hardwareStatus.alertActive || isHardwareAlertActive ->
                             "Drowsy alert active (buzzer + vibration)"
                         else -> null
                     }
@@ -432,7 +376,6 @@ fun LiveFeedScreen(
                         onClick = {
                             if (isDrivingActive) {
                                 showAlert = false
-                                alertController.forceStop(alertScope)
                                 detectionViewModel.finishSession { message ->
                                     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                                 }
@@ -591,92 +534,22 @@ private fun logLabel(status: LocalLogStatus): String = when (status) {
 
 @Composable
 private fun CameraPreview(
-    onFrame: (DriverMonitorFrame) -> Unit,
-    onEvent: (DetectionResult) -> Unit,
-    onError: (String) -> Unit,
+    onSurfaceChanged: (Preview.SurfaceProvider?) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
     val previewView = remember {
         PreviewView(context).apply {
             scaleType = PreviewView.ScaleType.FILL_CENTER
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
     }
-    val latestOnFrame = rememberUpdatedState(onFrame)
-    val latestOnEvent = rememberUpdatedState(onEvent)
-    val latestOnError = rememberUpdatedState(onError)
+    val latestOnSurfaceChanged by rememberUpdatedState(onSurfaceChanged)
 
-    DisposableEffect(lifecycleOwner, context) {
-        val disposed = AtomicBoolean(false)
-        val analysisExecutor = Executors.newSingleThreadExecutor()
-        val analyzer = DetectionAnalyzer(
-            monitor = HeuristicDriverMonitor(),
-            onEvent = { result -> if (!disposed.get()) latestOnEvent.value(result) },
-            onFrame = { frame -> if (!disposed.get()) latestOnFrame.value(frame) }
-        )
-        var provider: ProcessCameraProvider? = null
-        var boundCamera: Camera? = null
-        var boundPreview: Preview? = null
-        var boundAnalysis: ImageAnalysis? = null
-        val cameraObserver = Observer<CameraState> { state ->
-            val error = state.error
-            if (!disposed.get() && error != null) {
-                Log.e("LiveFeedScreen", "Camera state error ${error.code}", error.cause)
-                latestOnError.value("Camera unavailable (code ${error.code}). Close other camera apps and retry.")
-            }
-        }
-
-        try {
-            val future = ProcessCameraProvider.getInstance(context)
-            future.addListener({
-                if (!disposed.get()) {
-                    try {
-                        check(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-                                PackageManager.PERMISSION_GRANTED) { "Camera permission is not granted" }
-                        val cameraProvider = future.get()
-                        provider = cameraProvider
-                        val cameraSelector = when {
-                            cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) -> CameraSelector.DEFAULT_FRONT_CAMERA
-                            cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA
-                            else -> error("No camera is available on this device")
-                        }
-                        val preview = Preview.Builder().build().also {
-                            it.surfaceProvider = previewView.surfaceProvider
-                        }
-                        val imageAnalysis = ImageAnalysis.Builder()
-                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                            .build()
-                            .also { it.setAnalyzer(analysisExecutor, analyzer) }
-                        boundPreview = preview
-                        boundAnalysis = imageAnalysis
-                        boundCamera = cameraProvider.bindToLifecycle(
-                            lifecycleOwner, cameraSelector, preview, imageAnalysis
-                        )
-                        boundCamera?.cameraInfo?.cameraState?.observe(lifecycleOwner, cameraObserver)
-                        Log.d("LiveFeedScreen", "Camera preview and analyzer bound")
-                    } catch (e: Exception) {
-                        Log.e("LiveFeedScreen", "Camera initialization or binding failed", e)
-                        latestOnError.value("Camera failed to start (${e.javaClass.simpleName}). Check Logcat: LiveFeedScreen.")
-                    }
-                }
-            }, ContextCompat.getMainExecutor(context))
-        } catch (e: Exception) {
-            Log.e("LiveFeedScreen", "Camera provider initialization failed", e)
-            latestOnError.value("Camera unavailable (${e.javaClass.simpleName}). Check Logcat: LiveFeedScreen.")
-        }
-
-        onDispose {
-            disposed.set(true)
-            boundCamera?.cameraInfo?.cameraState?.removeObserver(cameraObserver)
-            boundAnalysis?.clearAnalyzer()
-            boundPreview?.let { provider?.unbind(it) }
-            boundAnalysis?.let { provider?.unbind(it) }
-            // Close on the analyzer queue, after any in-flight frame finishes.
-            analysisExecutor.execute { analyzer.close() }
-            analysisExecutor.shutdown()
-        }
+    // Detection runs in DrivingSessionMonitor; this only lends it a surface to draw on.
+    DisposableEffect(previewView) {
+        latestOnSurfaceChanged(previewView.surfaceProvider)
+        onDispose { latestOnSurfaceChanged(null) }
     }
 
     AndroidView(
@@ -710,7 +583,7 @@ private fun LiveBadge(modifier: Modifier = Modifier) {
     }
 }
 
-private fun formatTripDuration(totalSeconds: Long): String {
+internal fun formatTripDuration(totalSeconds: Long): String {
     val hours = totalSeconds / 3600
     val minutes = (totalSeconds % 3600) / 60
     val seconds = totalSeconds % 60

@@ -2,12 +2,15 @@ package com.example.d_r_i_v_e.frontend
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.camera.core.Preview
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.d_r_i_v_e.backend.AuthSession
 import com.example.d_r_i_v_e.backend.AuthViewModel
+import com.example.d_r_i_v_e.backend.Esp32AlertController
+import com.example.d_r_i_v_e.backend.Esp32Service
 import com.example.d_r_i_v_e.backend.OtpViewModel
 import com.example.d_r_i_v_e.backend.OtpUiState
 import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
@@ -74,7 +77,9 @@ fun AppNavigation() {
         }
     }
 
-    var isOnline by remember { mutableStateOf(false) }
+    val alertController = remember { Esp32AlertController { Esp32Service.getBaseUrl(context) } }
+    val isHardwareAlertActive by alertController.alertActive.collectAsState()
+    var previewSurface by remember { mutableStateOf<Preview.SurfaceProvider?>(null) }
     val hardwareStatus = if (currentScreen in mainTabScreens || currentScreen == "calibrateDevice") {
         val hardwareViewModel: HardwareStatusViewModel = viewModel(key = "hardware-${AuthSession.user?.id}")
         hardwareViewModel.status.collectAsStateWithLifecycle().value
@@ -102,17 +107,6 @@ fun AppNavigation() {
     }
     // ===================================================
 
-    var archiveEntries by remember {
-        mutableStateOf(
-            listOf(
-                ArchiveEntry("a1", "Drive session", "Aug 13 · 42 mins · 2 alerts", "drive", isAlertType = false),
-                ArchiveEntry("a2", "Drowsiness alert", "Aug 13 · 5:42 AM", "alert", isAlertType = true),
-                ArchiveEntry("a3", "Drowsiness alert", "Aug 13 · 5:01 AM", "alert", isAlertType = true),
-                ArchiveEntry("a4", "Drive session", "Yesterday · 1 hr · 1 alert", "drive", isAlertType = false)
-            )
-        )
-    }
-
     val authViewModel: AuthViewModel = viewModel()
     val signUpState by authViewModel.signUpState.collectAsState()
 
@@ -130,7 +124,6 @@ fun AppNavigation() {
         selectedGoogleAccount = null
         knownAccounts = emptyList()
         showAccountChooser = false
-        isOnline = false
     }
 
     // Restore the saved session before choosing the first screen, then react to
@@ -147,6 +140,12 @@ fun AppNavigation() {
             Toast.makeText(context, "Session expired. Please log in again.", Toast.LENGTH_LONG).show()
         }
     }
+
+    DrivingSessionMonitor(
+        detectionViewModel = detectionViewModel,
+        alertController = alertController,
+        previewSurface = previewSurface
+    )
 
     when (currentScreen) {
         "onboarding" -> OnboardingScreen(
@@ -301,12 +300,8 @@ fun AppNavigation() {
 
         "dashboard" -> DashboardScreen(
             isHardwareConnected = hardwareStatus.esp32Connected,
-            isOnline = isOnline,
             welcomeName = welcomeName,
             onWelcomeDismissed = { welcomeName = null },
-            onStartDrivingClick = {
-                isOnline = true
-            },
             onTabDashboardClick = { navigateTo("dashboard") },
             onTabCameraClick = { navigateTo("liveFeed") },
             onTabMapClick = { navigateTo("tripHistory") },
@@ -315,6 +310,8 @@ fun AppNavigation() {
 
         "liveFeed" -> LiveFeedScreen(
             hardwareStatus = hardwareStatus,
+            isHardwareAlertActive = isHardwareAlertActive,
+            onPreviewSurfaceChanged = { previewSurface = it },
             onTabDashboardClick = { navigateTo("dashboard") },
             onTabCameraClick = { navigateTo("liveFeed") },
             onTabMapClick = { navigateTo("tripHistory") },
@@ -351,6 +348,15 @@ fun AppNavigation() {
             driverName = AuthSession.user?.fullName ?: "Driver",
             onBackClick = { goBack() },
             onProfileRowClick = { navigateTo("editProfile") },
+            onNotificationsClick = { navigateTo("notifications") },
+            onTabDashboardClick = { navigateTo("dashboard") },
+            onTabCameraClick = { navigateTo("liveFeed") },
+            onTabMapClick = { navigateTo("tripHistory") },
+            onTabSettingsClick = { navigateTo("settings") }
+        )
+
+        "notifications" -> NotificationsScreen(
+            onBackClick = { goBack() },
             onTabDashboardClick = { navigateTo("dashboard") },
             onTabCameraClick = { navigateTo("liveFeed") },
             onTabMapClick = { navigateTo("tripHistory") },
@@ -383,18 +389,36 @@ fun AppNavigation() {
             onTabSettingsClick = { navigateTo("settings") }
         )
 
-        "archive" -> ArchiveScreen(
-            entries = archiveEntries,
-            onRestoreEntry = { _ -> },
-            onDeleteEntry = { targetId ->
-                archiveEntries = archiveEntries.filter { it.id != targetId }
-            },
-            onBackClick = { goBack() },
-            onTabDashboardClick = { navigateTo("dashboard") },
-            onTabCameraClick = { navigateTo("liveFeed") },
-            onTabMapClick = { navigateTo("tripHistory") },
-            onTabSettingsClick = { navigateTo("settings") }
-        )
+        "archive" -> {
+            val archiveState by tripHistoryViewModel.state.collectAsState()
+            ArchiveScreen(
+                entries = archiveState.archivedTrips.map { trip ->
+                    ArchiveEntry(
+                        id = trip.id,
+                        title = "Drive session",
+                        dateLabel = trip.dateLabel,
+                        category = "drive",
+                        isAlertType = false
+                    )
+                },
+                onRestoreEntry = { tripId ->
+                    tripHistoryViewModel.restoreTrip(tripId) { restored ->
+                        val message = if (restored) {
+                            "Drive session restored to Trip History."
+                        } else {
+                            "Couldn't restore the drive session. Please try again."
+                        }
+                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onDeleteEntry = { tripId -> tripHistoryViewModel.deleteArchivedTrip(tripId) },
+                onBackClick = { goBack() },
+                onTabDashboardClick = { navigateTo("dashboard") },
+                onTabCameraClick = { navigateTo("liveFeed") },
+                onTabMapClick = { navigateTo("tripHistory") },
+                onTabSettingsClick = { navigateTo("settings") }
+            )
+        }
 
         "helpSupport" -> HelpSupportScreen(
             reportState = reportState,

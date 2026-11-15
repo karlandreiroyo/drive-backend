@@ -8,11 +8,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 class Esp32AlertController(
     private val baseUrlProvider: () -> String
@@ -37,6 +40,9 @@ class Esp32AlertController(
 
     private val alertInFlight = AtomicBoolean(false)
     private val clearInFlight = AtomicBoolean(false)
+    private val generation = AtomicLong(0)
+    private val requestMutex = Mutex()
+    @Volatile private var monitoringEnabled = false
 
     private val _alertActive = MutableStateFlow(false)
     val alertActive: StateFlow<Boolean> = _alertActive
@@ -53,6 +59,8 @@ class Esp32AlertController(
     }
 
     fun onReading(isDrowsy: Boolean, scope: CoroutineScope) {
+        val requestGeneration = generation.get()
+        if (!monitoringEnabled) return
         val now = System.currentTimeMillis()
         when (state) {
             AlertState.IDLE -> {
@@ -61,7 +69,7 @@ class Esp32AlertController(
                     awakeStartMs = -1L
                     val elapsed = now - drowsyStartMs
                     if (elapsed >= DROWSY_THRESHOLD_MS && alertInFlight.compareAndSet(false, true)) {
-                        scope.launch { tryAlert() }
+                        scope.launch { tryAlert(requestGeneration) }
                     }
                 } else {
                     drowsyStartMs = -1L
@@ -74,7 +82,7 @@ class Esp32AlertController(
                     drowsyStartMs = -1L
                     val elapsed = now - awakeStartMs
                     if (elapsed >= AWAKE_THRESHOLD_MS && clearInFlight.compareAndSet(false, true)) {
-                        scope.launch { tryClear() }
+                        scope.launch { tryClear(requestGeneration) }
                     }
                 } else {
                     awakeStartMs = -1L
@@ -85,51 +93,64 @@ class Esp32AlertController(
 
     fun forceStop(scope: CoroutineScope) {
         Log.i(TAG, "forceStop() - sending /clear and resetting state")
+        monitoringEnabled = false
+        val requestGeneration = generation.incrementAndGet()
+        state = AlertState.IDLE
         drowsyStartMs = -1L
         awakeStartMs = -1L
-        if (clearInFlight.compareAndSet(false, true)) {
-            scope.launch { tryClear(forced = true) }
-        }
-        state = AlertState.IDLE
+        // Always queue a final clear; a skipped in-flight clear must not leave the buzzer on.
+        clearInFlight.set(true)
+        scope.launch { tryClear(requestGeneration, forced = true) }
     }
 
     fun reset() {
         Log.i(TAG, "reset() - clearing state without network call")
+        generation.incrementAndGet()
         state = AlertState.IDLE
         drowsyStartMs = -1L
         awakeStartMs = -1L
         _alertActive.value = false
+        monitoringEnabled = true
     }
 
-    private suspend fun tryAlert() {
+    private suspend fun tryAlert(requestGeneration: Long) {
         try {
-            val url = "${baseUrlProvider().trimEnd('/')}/alert"
-            val success = sendWithRetry(url)
-            if (success) {
-                _alertActive.value = true
-                state = AlertState.ALERTING
-                awakeStartMs = -1L
-                Log.i(TAG, "State -> ALERTING (alertActive = true)")
-            } else {
-                Log.w(TAG, "tryAlert() exhausted retries - staying IDLE, will retry next frame")
+            requestMutex.withLock {
+                if (requestGeneration != generation.get() || !monitoringEnabled) return@withLock
+                val url = "${baseUrlProvider().trimEnd('/')}/alert"
+                val success = sendWithRetry(url)
+                if (requestGeneration != generation.get() || !monitoringEnabled) return@withLock
+                if (success) {
+                    _alertActive.value = true
+                    state = AlertState.ALERTING
+                    awakeStartMs = -1L
+                    Log.i(TAG, "State -> ALERTING (alertActive = true)")
+                } else {
+                    Log.w(TAG, "tryAlert() exhausted retries - staying IDLE, will retry next frame")
+                }
             }
         } finally {
             alertInFlight.set(false)
         }
     }
 
-    private suspend fun tryClear(forced: Boolean = false) {
+    private suspend fun tryClear(requestGeneration: Long, forced: Boolean = false) {
         try {
-            val url = "${baseUrlProvider().trimEnd('/')}/clear"
-            val success = sendWithRetry(url)
-            if (success) {
-                _alertActive.value = false
-                state = AlertState.IDLE
-                drowsyStartMs = -1L
-                awakeStartMs = -1L
-                Log.i(TAG, "State -> IDLE (alertActive = false)${if (forced) " [forced]" else ""}")
-            } else {
-                Log.w(TAG, "tryClear() exhausted retries - alertActive stays true, will retry")
+            // A final /clear must reach the hardware after any in-flight /alert.
+            requestMutex.withLock {
+                if (!forced && requestGeneration != generation.get()) return@withLock
+                val url = "${baseUrlProvider().trimEnd('/')}/clear"
+                val success = sendWithRetry(url)
+                if (requestGeneration != generation.get()) return@withLock
+                if (success) {
+                    _alertActive.value = false
+                    state = AlertState.IDLE
+                    drowsyStartMs = -1L
+                    awakeStartMs = -1L
+                    Log.i(TAG, "State -> IDLE (alertActive = false)${if (forced) " [forced]" else ""}")
+                } else {
+                    Log.w(TAG, "tryClear() exhausted retries - alertActive stays true, will retry")
+                }
             }
         } finally {
             clearInFlight.set(false)

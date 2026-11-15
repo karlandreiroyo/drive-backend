@@ -29,5 +29,6 @@ data class TripEntity(
     companion object {
         const val STATUS_IN_PROGRESS = "IN_PROGRESS"
         const val STATUS_COMPLETED = "COMPLETED"
+        const val STATUS_ARCHIVED = "ARCHIVED"
     }
 }

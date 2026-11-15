@@ -206,31 +206,15 @@ fun SettingsScreen(
 
         // Logout confirmation dialog
         if (showLogoutDialog) {
-            AlertDialog(
-                onDismissRequest = { showLogoutDialog = false },
-                title = {
-                    Text(text = "Log out", color = Color.White, fontWeight = FontWeight.Bold)
+            ConfirmationDialog(
+                title = "Logging out?",
+                confirmLabel = "Log out",
+                showWarningIcon = false,
+                onConfirm = {
+                    showLogoutDialog = false
+                    onLogoutClick()
                 },
-                text = {
-                    Text(
-                        text = "Are you sure you want to log out?",
-                        color = Color.White.copy(alpha = 0.8f)
-                    )
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        showLogoutDialog = false
-                        onLogoutClick()
-                    }) {
-                        Text(text = "Log out", color = Color(0xFFD32F2F), fontWeight = FontWeight.SemiBold)
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showLogoutDialog = false }) {
-                        Text(text = "Cancel", color = Color.White.copy(alpha = 0.7f))
-                    }
-                },
-                containerColor = Color(0xFF1C1C1E)
+                onDismiss = { showLogoutDialog = false }
             )
         }
 
