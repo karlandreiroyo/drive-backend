@@ -97,7 +97,7 @@ fun LoginScreen(
     }
 
     var email by remember { mutableStateOf(sharedPreferences.getString("saved_email", "") ?: "") }
-    var password by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf(sharedPreferences.getString("saved_password", "") ?: "") }
     var rememberMe by remember { mutableStateOf(sharedPreferences.getBoolean("remember_me", false)) }
     var passwordVisible by remember { mutableStateOf(false) }
 
@@ -289,6 +289,7 @@ fun LoginScreen(
                         if (rememberMe) {
                             sharedPreferences.edit().apply {
                                 putString("saved_email", email)
+                                putString("saved_password", password)
                                 putBoolean("remember_me", true)
                                 apply()
                             }
