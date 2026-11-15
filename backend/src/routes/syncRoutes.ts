@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { supabase } from '../lib/supabase.js';
 import { requireAuth, AuthenticatedRequest } from '../middleware/requireAuth.js';
 import {
+    AlertCategory,
     EmergencyIncident,
     isEmergencyEmailConfigured,
     sendEmergencyIncidentEmail,
@@ -16,8 +17,9 @@ const MAX_DESCRIPTION = 160;
 const MAX_SHORT_TEXT = 64;
 const MAX_LABEL = 120;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const CRITICAL_CONFIDENCE = 0.75;
-const CRITICAL_TYPES = ['microsleep', 'drowsiness', 'sleep', 'fatigue', 'eye'];
+// Labels the on-device monitor emits for a drowsiness event. Anything else it
+// records (e.g. "Motion") is treated as a system alert.
+const DROWSINESS_TYPES = ['microsleep', 'drowsiness', 'sleep', 'fatigue', 'drowsy', 'eye', 'yawn'];
 
 type TripRow = {
     id: string;
@@ -102,10 +104,10 @@ function readIncident(raw: unknown): Omit<IncidentRow, 'user_id'> | null {
     };
 }
 
-function isCritical(incidentType: string, confidence: number): boolean {
-    if (confidence >= CRITICAL_CONFIDENCE) return true;
+/** Drowsiness detections and system alerts both notify the account owner. */
+function classifyIncident(incidentType: string): AlertCategory {
     const normalized = incidentType.toLowerCase();
-    return CRITICAL_TYPES.some((type) => normalized.includes(type));
+    return DROWSINESS_TYPES.some((type) => normalized.includes(type)) ? 'drowsiness' : 'alert';
 }
 
 router.post('/sync', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
@@ -208,7 +210,14 @@ router.post('/sync', requireAuth, async (req: AuthenticatedRequest, res: Respons
             }
         }
 
-        const emailSentIds = await dispatchEmergencyEmail(userId);
+        // Email is a best-effort side effect: a Brevo outage must never fail the
+        // sync itself or interrupt the on-device detection/alert pipeline.
+        let emailSentIds: string[] = [];
+        try {
+            emailSentIds = await dispatchEmergencyEmail(userId);
+        } catch (emailErr: unknown) {
+            console.error('[sync] Alert email dispatch failed:', emailErr);
+        }
 
         return res.json({
             success: true,
@@ -225,22 +234,20 @@ router.post('/sync', requireAuth, async (req: AuthenticatedRequest, res: Respons
 });
 
 /**
- * Picks up every critical incident that has not triggered an email yet, so a
- * Brevo outage on one sync is retried on the next worker run.
+ * Picks up every drowsiness detection and system alert that has not triggered
+ * an email yet, so a Brevo outage on one sync is retried on the next run.
  */
 async function dispatchEmergencyEmail(userId: string): Promise<string[]> {
-    if (!isEmergencyEmailConfigured()) return [];
-
-    const criticalTypes = CRITICAL_TYPES
-        .map((type) => `incident_type.ilike.*${type}*`)
-        .join(',');
+    if (!isEmergencyEmailConfigured()) {
+        console.warn('[sync] Brevo is not configured (BREVO_API_KEY); alert email skipped.');
+        return [];
+    }
 
     const { data: pending, error } = await supabase
         .from('trip_incidents')
-        .select('id,incident_type,confidence,description,time')
+        .select('id,incident_type,confidence,description,time,trip_id,created_at')
         .eq('user_id', userId)
         .eq('email_sent', false)
-        .or(`confidence.gte.${CRITICAL_CONFIDENCE},${criticalTypes}`)
         .order('device_timestamp', { ascending: true })
         .limit(100);
 
@@ -249,11 +256,8 @@ async function dispatchEmergencyEmail(userId: string): Promise<string[]> {
         return [];
     }
 
-    const critical = (pending ?? []).filter((row: Record<string, unknown>) =>
-        isCritical(String(row.incident_type ?? ''), Number(row.confidence ?? 0))
-    );
-
-    if (critical.length === 0) return [];
+    const pendingIncidents = pending ?? [];
+    if (pendingIncidents.length === 0) return [];
 
     const { data: userRow, error: userError } = await supabase
         .from('users')
@@ -272,17 +276,23 @@ async function dispatchEmergencyEmail(userId: string): Promise<string[]> {
         return [];
     }
 
-    const incidents: EmergencyIncident[] = critical.map((row: Record<string, unknown>) => ({
+    // Trip context is optional: incidents raised outside a stored trip still send.
+    const tripLabels = await loadTripLabels(pendingIncidents);
+
+    const incidents: EmergencyIncident[] = pendingIncidents.map((row: Record<string, unknown>) => ({
         incidentType: String(row.incident_type ?? 'Detection'),
         confidence: Number(row.confidence ?? 0),
         description: String(row.description ?? ''),
         time: String(row.time ?? ''),
+        date: formatDate(row.created_at),
+        tripLabel: tripLabels.get(String(row.trip_id ?? '')),
+        category: classifyIncident(String(row.incident_type ?? '')),
     }));
 
     const sent = await sendEmergencyIncidentEmail(recipient, userRow?.full_name ?? null, incidents);
     if (!sent) return [];
 
-    const emailSentIds = critical.map((row: Record<string, unknown>) => String(row.id));
+    const emailSentIds = pendingIncidents.map((row: Record<string, unknown>) => String(row.id));
     const { error: markError } = await supabase
         .from('trip_incidents')
         .update({ email_sent: true })
@@ -294,6 +304,54 @@ async function dispatchEmergencyEmail(userId: string): Promise<string[]> {
     }
 
     return emailSentIds;
+}
+
+/**
+ * Resolves a short human-readable label for each incident's trip (route and
+ * start date) so the alert email can show trip context when it exists.
+ */
+async function loadTripLabels(
+    incidents: Record<string, unknown>[]
+): Promise<Map<string, string>> {
+    const labels = new Map<string, string>();
+    const tripIds = [...new Set(
+        incidents.map((row) => String(row.trip_id ?? '')).filter((id) => id.length > 0)
+    )];
+    if (tripIds.length === 0) return labels;
+
+    const { data, error } = await supabase
+        .from('trips')
+        .select('id,origin,destination,start_time')
+        .in('id', tripIds);
+
+    if (error) {
+        console.error('[sync] Trip lookup for alert email failed:', error);
+        return labels;
+    }
+
+    (data ?? []).forEach((trip: Record<string, unknown>) => {
+        const origin = String(trip.origin ?? '').trim();
+        const destination = String(trip.destination ?? '').trim();
+        const route = origin && destination ? `${origin} → ${destination}` : origin || destination;
+        const started = formatDate(trip.start_time);
+        const parts = [route, started ? `started ${started}` : ''].filter((part) => part.length > 0);
+        if (parts.length > 0) labels.set(String(trip.id), parts.join(' · '));
+    });
+
+    return labels;
+}
+
+const MONTH_ABBREVIATIONS = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+function formatDate(value: unknown): string {
+    const raw = typeof value === 'string' ? value.trim() : '';
+    if (!raw) return '';
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return `${MONTH_ABBREVIATIONS[parsed.getUTCMonth()]} ${parsed.getUTCDate()}, ${parsed.getUTCFullYear()}`;
 }
 
 /**
