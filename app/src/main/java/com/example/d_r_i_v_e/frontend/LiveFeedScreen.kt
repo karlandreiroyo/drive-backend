@@ -76,7 +76,6 @@ fun LiveFeedScreen(
     val statusMessage by detectionViewModel.statusMessage.collectAsState()
     val monitorFrame by detectionViewModel.monitorFrame.collectAsState()
 
-    // Latest detection kept for the exit animation of the banner.
     var showAlert by remember { mutableStateOf(false) }
     var alertEvent by remember { mutableStateOf<DetectionEvent?>(null) }
 
@@ -144,14 +143,12 @@ fun LiveFeedScreen(
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.systemBars)
         ) {
-            // Content fills the space above the anchored bottom navigation.
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp, vertical = 6.dp)
             ) {
-                // Main Container Card
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -159,7 +156,6 @@ fun LiveFeedScreen(
                         .background(Color(0xFF141414))
                         .padding(10.dp)
                 ) {
-                    // Header Row (compact)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -178,7 +174,6 @@ fun LiveFeedScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Camera preview: takes ALL remaining vertical space.
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -225,7 +220,6 @@ fun LiveFeedScreen(
                             }
                         }
 
-                        // ESP32 status chip over the video (top-right)
                         Row(
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
@@ -254,7 +248,6 @@ fun LiveFeedScreen(
                             )
                         }
 
-                        // Metrics overlaid on the video (bottom)
                         val metrics = monitorFrame
                         Row(
                             modifier = Modifier
@@ -276,7 +269,9 @@ fun LiveFeedScreen(
                                     metrics.drowsy -> "Drowsy"
                                     else -> "Alert"
                                 },
-                                sub = metrics?.let { "${(it.drowsinessConfidence * 100).toInt()}%" },
+                                sub = metrics?.let {
+                                    getFriendlyAlertLabel("drowsiness", it.drowsinessConfidence)
+                                },
                                 valueColor = when {
                                     metrics?.drowsy == true -> Color(0xFFFF6B6B)
                                     metrics != null -> Color(0xFF4CD964)
@@ -288,7 +283,9 @@ fun LiveFeedScreen(
                                 label = "Head",
                                 value = metrics?.headPoseLabel
                                     ?: if (isDrivingActive) "Calibrating…" else "--",
-                                sub = metrics?.let { "${(it.headPoseConfidence * 100).toInt()}%" },
+                                sub = metrics?.let {
+                                    if (it.headPoseConfidence >= 0.7f) "Stable" else "Moving"
+                                },
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -296,7 +293,6 @@ fun LiveFeedScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Status Message Card (compact)
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -328,7 +324,6 @@ fun LiveFeedScreen(
                         )
                     }
 
-                    // Hardware details line (only when there is something to say)
                     val hardwareNote = when {
                         !hardwareStatus.esp32Connected && hardwareStatus.message != null ->
                             hardwareStatus.message
@@ -348,7 +343,6 @@ fun LiveFeedScreen(
                         )
                     }
 
-                    // Sync summary
                     if (isDrivingActive && detectionCount > 0) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
@@ -371,7 +365,6 @@ fun LiveFeedScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Action Button (Start / Stop Driving Session)
                     Button(
                         onClick = {
                             if (isDrivingActive) {
@@ -448,7 +441,6 @@ fun LiveFeedScreen(
             )
         }
 
-        // Heads-up alert floats above the feed, anchored to the top edge.
         AnimatedVisibility(
             visible = showAlert,
             modifier = Modifier
@@ -506,7 +498,7 @@ private fun DetectionAlertBanner(
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = "Driver alert · ${(event.confidence * 100).toInt()}% confidence",
+                text = getFriendlyAlertLabel(event.label, event.confidence),
                 color = Color.White.copy(alpha = 0.65f),
                 fontSize = 11.sp
             )
@@ -546,7 +538,6 @@ private fun CameraPreview(
     }
     val latestOnSurfaceChanged by rememberUpdatedState(onSurfaceChanged)
 
-    // Detection runs in DrivingSessionMonitor; this only lends it a surface to draw on.
     DisposableEffect(previewView) {
         latestOnSurfaceChanged(previewView.surfaceProvider)
         onDispose { latestOnSurfaceChanged(null) }
@@ -594,7 +585,6 @@ internal fun formatTripDuration(totalSeconds: Long): String {
     }
 }
 
-/** Compact translucent metric shown on top of the video. */
 @Composable
 private fun MetricChip(
     label: String,
@@ -625,5 +615,28 @@ private fun MetricChip(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+    }
+}
+
+/**
+ * Isang beses lang idineklara rito para maiwasan ang overload ambiguity at conflicting overloads.
+ */
+private fun getFriendlyAlertLabel(incidentType: String, confidence: Float): String {
+    val type = incidentType.trim().lowercase()
+
+    return when {
+        type.contains("drowsiness") || type.contains("eyes") -> {
+            if (confidence >= 0.7f) "Microsleep detected"
+            else if (confidence >= 0.4f) "Signs of fatigue observed"
+            else "Driver attention low"
+        }
+        type.contains("motion") -> {
+            if (confidence >= 0.7f) "Sudden harsh movement detected"
+            else "Unusual motion noticed"
+        }
+        else -> {
+            if (confidence >= 0.7f) "High-priority safety alert"
+            else "Driver check-in recommended"
+        }
     }
 }

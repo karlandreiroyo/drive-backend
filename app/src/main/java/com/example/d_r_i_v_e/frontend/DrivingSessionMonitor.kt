@@ -178,26 +178,3 @@ private fun selectCamera(provider: ProcessCameraProvider): CameraSelector = when
     provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA
     else -> error("No camera is available on this device")
 }
-
-/**
- * Helper function para palitan ang raw percentage/confidence sa mas user-friendly na terminolohiya
- */
-fun getFriendlyAlertLabel(incidentType: String, confidence: Float): String {
-    val type = incidentType.trim().lowercase()
-
-    return when {
-        type.contains("drowsiness") || type.contains("eyes") -> {
-            if (confidence >= 0.7f) "Microsleep detected"
-            else if (confidence >= 0.4f) "Signs of fatigue observed"
-            else "Driver attention low"
-        }
-        type.contains("motion") -> {
-            if (confidence >= 0.7f) "Sudden harsh movement detected"
-            else "Unusual motion noticed"
-        }
-        else -> {
-            if (confidence >= 0.7f) "High-priority safety alert"
-            else "Driver check-in recommended"
-        }
-    }
-}
