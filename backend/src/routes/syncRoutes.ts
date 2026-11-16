@@ -235,7 +235,9 @@ router.post('/sync', requireAuth, async (req: AuthenticatedRequest, res: Respons
 
 /**
  * Picks up every drowsiness detection and system alert that has not triggered
- * an email yet, so a Brevo outage on one sync is retried on the next run.
+ * an email yet, so a Brevo outage (or the email cooldown) on one sync is
+ * retried on the next run. Incidents are only marked as emailed when an email
+ * was actually sent.
  */
 async function dispatchEmergencyEmail(userId: string): Promise<string[]> {
     if (!isEmergencyEmailConfigured()) {
@@ -309,6 +311,7 @@ async function dispatchEmergencyEmail(userId: string): Promise<string[]> {
 /**
  * Resolves a short human-readable label for each incident's trip (route and
  * start date) so the alert email can show trip context when it exists.
+ * Placeholder routes ("Current location → Destination") are left out.
  */
 async function loadTripLabels(
     incidents: Record<string, unknown>[]
@@ -329,10 +332,15 @@ async function loadTripLabels(
         return labels;
     }
 
+    const isPlaceholder = (value: string) =>
+        value === 'Current location' || value === 'Destination';
+
     (data ?? []).forEach((trip: Record<string, unknown>) => {
         const origin = String(trip.origin ?? '').trim();
         const destination = String(trip.destination ?? '').trim();
-        const route = origin && destination ? `${origin} → ${destination}` : origin || destination;
+        const route = origin && destination && !(isPlaceholder(origin) && isPlaceholder(destination))
+            ? `${origin} → ${destination}`
+            : '';
         const started = formatDate(trip.start_time);
         const parts = [route, started ? `started ${started}` : ''].filter((part) => part.length > 0);
         if (parts.length > 0) labels.set(String(trip.id), parts.join(' · '));
@@ -341,17 +349,18 @@ async function loadTripLabels(
     return labels;
 }
 
-const MONTH_ABBREVIATIONS = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-];
-
+/** Formats a timestamp as e.g. "Nov 16, 2026" in Philippine time (Asia/Manila). */
 function formatDate(value: unknown): string {
     const raw = typeof value === 'string' ? value.trim() : '';
     if (!raw) return '';
     const parsed = new Date(raw);
     if (Number.isNaN(parsed.getTime())) return '';
-    return `${MONTH_ABBREVIATIONS[parsed.getUTCMonth()]} ${parsed.getUTCDate()}, ${parsed.getUTCFullYear()}`;
+    return parsed.toLocaleDateString('en-US', {
+        timeZone: 'Asia/Manila',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+    });
 }
 
 /**
