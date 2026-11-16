@@ -417,8 +417,9 @@ private val percentPattern = Regex("""(\d{1,3})\s*%""")
 // Room stores the type and confidence in their own columns, so no string
 // parsing is needed; the description stays a human-readable summary only.
 private fun Incident.toDisplay(): IncidentDisplay {
-    val percent = confidence?.let { (it.coerceIn(0f, 1f) * 100).toInt() }
-        ?: parseConfidence(description)
+    val percent = confidence?.let {
+        if (it <= 1f) (it * 100).toInt() else it.toInt()
+    } ?: parseConfidence(description)
     val severity = when {
         percent == null -> null
         percent >= 75 -> "High"
@@ -435,7 +436,7 @@ private fun Incident.toDisplay(): IncidentDisplay {
     return IncidentDisplay(
         title = friendlyIncidentName(type.ifBlank { description }),
         severityLabel = if (severity != null && percent != null) {
-            "Severity: $severity ($percent%)"
+            "Severity: $severity ($percent% Probability)"   // <--- GINAWANG PROBABILITY
         } else {
             null
         },
