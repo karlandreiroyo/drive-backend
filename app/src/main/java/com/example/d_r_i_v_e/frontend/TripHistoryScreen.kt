@@ -3,10 +3,10 @@ package com.example.d_r_i_v_e.frontend
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
@@ -53,17 +53,7 @@ fun TripHistoryScreen(
         historyViewModel.refresh()
     }
 
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(sessionStartedAt) {
-        if (sessionStartedAt == null) return@LaunchedEffect
-        while (true) {
-            now = System.currentTimeMillis()
-            delay(1_000)
-        }
-    }
-
     val startedAt = sessionStartedAt
-    val elapsedSeconds = startedAt?.let { ((now - it) / 1_000).coerceAtLeast(0) } ?: 0L
     val sessionIncidentCount = liveIncidentCount
     var pendingDeleteTripId by remember { mutableStateOf<String?>(null) }
 
@@ -85,46 +75,48 @@ fun TripHistoryScreen(
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)
             )
 
-            Column(
+            LazyColumn(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp)
+                    .padding(horizontal = 20.dp),
+                contentPadding = PaddingValues(bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 if (startedAt != null) {
-                    CurrentSessionCard(
-                        elapsedSeconds = elapsedSeconds,
-                        incidentCount = sessionIncidentCount
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                }
-
-                if (state.isLoading && state.trips.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 40.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator(color = Color(0xFF4C6FFF))
+                    item {
+                        CurrentSessionCard(
+                            sessionStartedAt = startedAt,
+                            incidentCount = sessionIncidentCount
+                        )
                     }
                 }
 
-                state.trips.forEach { trip ->
+                if (state.isLoading && state.trips.isEmpty()) {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 40.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(color = Color(0xFF4C6FFF))
+                        }
+                    }
+                }
+
+                items(state.trips, key = { it.id }) { trip ->
                     TripCard(
                         trip = trip,
                         onDeleteClick = { pendingDeleteTripId = trip.id }
                     )
-                    Spacer(modifier = Modifier.height(16.dp))
                 }
 
                 if (!state.isLoading && state.trips.isEmpty()) {
-                    EmptyTripsCard(hasActiveSession = sessionStartedAt != null)
-                    Spacer(modifier = Modifier.height(16.dp))
+                    item {
+                        EmptyTripsCard(hasActiveSession = sessionStartedAt != null)
+                    }
                 }
-
-                Spacer(modifier = Modifier.height(8.dp))
             }
 
             SharedBottomNav(
@@ -153,9 +145,17 @@ fun TripHistoryScreen(
 
 @Composable
 private fun CurrentSessionCard(
-    elapsedSeconds: Long,
+    sessionStartedAt: Long,
     incidentCount: Int
 ) {
+    var elapsedSeconds by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(sessionStartedAt) {
+        while (true) {
+            elapsedSeconds = ((System.currentTimeMillis() - sessionStartedAt) / 1_000).coerceAtLeast(0L)
+            delay(1_000)
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -414,8 +414,6 @@ private data class IncidentDisplay(
 
 private val percentPattern = Regex("""(\d{1,3})\s*%""")
 
-// Room stores the type and confidence in their own columns, so no string
-// parsing is needed; the description stays a human-readable summary only.
 private fun Incident.toDisplay(): IncidentDisplay {
     val percent = confidence?.let {
         if (it <= 1f) (it * 100).toInt() else it.toInt()
@@ -436,7 +434,7 @@ private fun Incident.toDisplay(): IncidentDisplay {
     return IncidentDisplay(
         title = friendlyIncidentName(type.ifBlank { description }),
         severityLabel = if (severity != null && percent != null) {
-            "Severity: $severity ($percent% Probability)"   // <--- GINAWANG PROBABILITY
+            "Severity: $severity ($percent% Probability)"
         } else {
             null
         },
@@ -456,19 +454,19 @@ private fun friendlyIncidentName(rawType: String): String {
     return when {
         normalized.isBlank() -> "Safety Alert"
         normalized.contains("microsleep") ||
-            normalized.contains("eye") ||
-            normalized.contains("blink") -> "Microsleep Detected"
+                normalized.contains("eye") ||
+                normalized.contains("blink") -> "Microsleep Detected"
         normalized.contains("drows") ||
-            normalized.contains("sleep") ||
-            normalized.contains("fatigue") ||
-            normalized.contains("yawn") -> "Drowsiness Alert"
+                normalized.contains("sleep") ||
+                normalized.contains("fatigue") ||
+                normalized.contains("yawn") -> "Drowsiness Alert"
         normalized.contains("nod") ||
-            normalized.contains("head") ||
-            normalized.contains("distract") ||
-            normalized.contains("gaze") ||
-            normalized.contains("phone") ||
-            normalized.contains("motion") ||
-            normalized.contains("movement") -> "Head Nod / Distraction"
+                normalized.contains("head") ||
+                normalized.contains("distract") ||
+                normalized.contains("gaze") ||
+                normalized.contains("phone") ||
+                normalized.contains("motion") ||
+                normalized.contains("movement") -> "Head Nod / Distraction"
         else -> rawType.trim().ifBlank { "Safety Alert" }
     }
 }
