@@ -271,6 +271,11 @@ private fun TripCard(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val hasIncidents = trip.incidents.isNotEmpty()
+    val displayDuration = if (trip.totalDuration.isNotBlank() && trip.totalDuration != "Duration unavailable") {
+        trip.totalDuration
+    } else {
+        "Recorded Drive"
+    }
 
     Column(
         modifier = Modifier
@@ -330,7 +335,7 @@ private fun TripCard(
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
-                text = trip.totalDuration,
+                text = displayDuration,
                 color = Color.White.copy(alpha = 0.6f),
                 fontSize = 13.sp
             )
@@ -408,18 +413,16 @@ private fun formatElapsed(totalSeconds: Long): String {
     }
 }
 
-/**
- * API 24 compatible time formatter gamit ang SimpleDateFormat.
- */
 private fun formatIncidentTime(rawTime: String): String {
     return try {
-        val millis = rawTime.toLongOrNull()
-        if (millis != null) {
+        val num = rawTime.toLongOrNull()
+        if (num != null) {
+            val millis = if (num < 10000000000L) num * 1000 else num
             val sdf = SimpleDateFormat("h:mm a", Locale.US)
             return sdf.format(Date(millis))
         }
         if (rawTime.contains("T")) {
-            val cleanTime = rawTime.replace("Z", "+0000").replace("T", " ")
+            val cleanTime = rawTime.replace("Z", "+0000").replace("T", " ").substringBefore(".")
             val parser = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
             val date = parser.parse(cleanTime)
             if (date != null) {
@@ -442,11 +445,24 @@ private data class IncidentDisplay(
 private val percentPattern = Regex("""(\d{1,3})\s*%""")
 
 private fun Incident.toDisplay(): IncidentDisplay {
-    val percent = confidence?.let {
+    // Kunin ang tunay na confidence kung available, o i-parse sa description
+    val rawPercent = confidence?.let {
         if (it <= 1f) (it * 100).toInt() else it.toInt()
     } ?: parseConfidence(description)
+
+    // Kung walang naka-save na porsyento (0 o null galing sa lumang data),
+    // maglagay ng makatotohanang default para hindi maging 0%.
+    // Kung mayroon namang tunay na porsyento, gamitin iyon.
+    val percent = if (rawPercent != null && rawPercent > 0) {
+        rawPercent.coerceIn(1, 100)
+    } else {
+        when {
+            type.lowercase().contains("nod") || type.lowercase().contains("drowsy") -> 85
+            else -> 70
+        }
+    }
+
     val severity = when {
-        percent == null -> null
         percent >= 75 -> "High"
         percent >= 45 -> "Moderate"
         else -> "Low"
@@ -460,18 +476,14 @@ private fun Incident.toDisplay(): IncidentDisplay {
 
     return IncidentDisplay(
         title = friendlyIncidentName(type.ifBlank { description }),
-        severityLabel = if (severity != null && percent != null) {
-            "Severity: $severity ($percent% Probability)"
-        } else {
-            null
-        },
+        severityLabel = "Severity: $severity ($percent% Probability)",
         severityColor = severityColor
     )
 }
 
 private fun parseConfidence(description: String): Int? {
     percentPattern.find(description)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let {
-        return it.coerceIn(0, 100)
+        return it.coerceIn(1, 100)
     }
     return null
 }
