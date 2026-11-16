@@ -32,9 +32,8 @@ import com.example.d_r_i_v_e.TripEntry
 import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
 import com.example.d_r_i_v_e.backend.routes.TripHistoryViewModel
 import kotlinx.coroutines.delay
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 @Composable
@@ -375,7 +374,7 @@ private fun TripCard(
                                 if (incident.time.isNotBlank()) {
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(
-                                        text = formatIncidentTime(incident.time), // <--- Dito na-format sa tamang local time
+                                        text = formatIncidentTime(incident.time),
                                         color = Color.White.copy(alpha = 0.5f),
                                         fontSize = 12.sp
                                     )
@@ -410,20 +409,26 @@ private fun formatElapsed(totalSeconds: Long): String {
 }
 
 /**
- * Nag-aayos at nagko-convert ng raw/UTC incident time patungong tamang local time format (h:mm a).
+ * API 24 compatible time formatter gamit ang SimpleDateFormat.
  */
 private fun formatIncidentTime(rawTime: String): String {
     return try {
-        // Kung ISO format o timestamp galing sa server/database na may 'T' o '-'
-        if (rawTime.contains("T") || (rawTime.contains("-") && rawTime.length > 8)) {
-            val instant = Instant.parse(rawTime)
-            val formatter = DateTimeFormatter.ofPattern("h:mm a", Locale.US)
-                .withZone(ZoneId.systemDefault())
-            formatter.format(instant)
-        } else {
-            rawTime // Kung naka-format na string na, panatilihin o ibalik lang
+        val millis = rawTime.toLongOrNull()
+        if (millis != null) {
+            val sdf = SimpleDateFormat("h:mm a", Locale.US)
+            return sdf.format(Date(millis))
         }
-    } catch (e: Exception) {
+        if (rawTime.contains("T")) {
+            val cleanTime = rawTime.replace("Z", "+0000").replace("T", " ")
+            val parser = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+            val date = parser.parse(cleanTime)
+            if (date != null) {
+                val formatter = SimpleDateFormat("h:mm a", Locale.US)
+                return formatter.format(date)
+            }
+        }
+        rawTime
+    } catch (_: Exception) {
         rawTime
     }
 }
