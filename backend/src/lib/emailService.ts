@@ -27,11 +27,11 @@ const COOLDOWN_MS = 5 * 60 * 1000;
 const lastSentAt = new Map<string, number>();
 
 const SAFETY_NOTE =
-    'This is an automated estimate and false alerts can occur from glare, low light, or camera movement. ' +
-    'If the driver is safe, no action is needed. Otherwise, please contact them and make sure they are able to rest before continuing to drive.';
+    'This is an automated safety notification. False alerts can occasionally happen due to road conditions or lighting. ' +
+    'If the driver is safe, no action is needed. Otherwise, please check on them and ensure they get proper rest before continuing their trip.';
 
 function categoryLabel(category: AlertCategory | undefined): string {
-    return category === 'drowsiness' ? 'Drowsiness alert' : 'System alert';
+    return category === 'drowsiness' ? 'Drowsiness Alert' : 'Safety Alert';
 }
 
 /** Overall tone of a batch: drowsiness-only, alert-only, or a mix of both. */
@@ -48,58 +48,55 @@ export function isEmergencyEmailConfigured(): boolean {
 
 function escapeHtml(value: string): string {
     return value
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
+        .replace(/&/g, '&')
+        .replace(/</g, '<')
+        .replace(/>/g, '>')
+        .replace(/"/g, '"')
+        .replace(/'/g, ''');
 }
 
-/** The description often repeats the confidence ("Motion · 51% confidence"); hide that duplicate. */
-function usefulDescription(description: string): string {
-    const value = (description ?? '').trim();
-    return /confidence/i.test(value) ? '' : value;
-}
-
-/**
- * Plain-language label for the email. The on-device monitor measures overall
- * frame motion (not eyes or head directly), so the wording stays honest about that.
- */
-function describeIncident(incident: EmergencyIncident): string {
-    const type = (incident.incidentType ?? '').trim().toLowerCase();
-
-    if (type === 'drowsiness') return 'Possible drowsiness (driver appeared still for several seconds)';
-    if (type === 'motion') return 'Sudden movement detected in the camera view';
-
-    const fallback = (incident.incidentType ?? '').trim();
-    return fallback ? `${fallback} detected` : 'Driver alert detected';
-}
-
-/** Low / Medium / High wording. Adjust the cutoffs to match the app's Trip History. */
+/** Low / Medium / High wording. */
 function severityLabel(confidence: number): string {
     if (confidence >= 0.8) return 'High';
     if (confidence >= 0.5) return 'Medium';
     return 'Low';
 }
 
+function severityColors(confidence: number): { bg: string; text: string; border: string } {
+    if (confidence >= 0.8) {
+        return { bg: '#FEE2E2', text: '#B91C1C', border: '#FCA5A5' };
+    }
+    if (confidence >= 0.5) {
+        return { bg: '#FEF3C7', text: '#B45309', border: '#FCD34D' };
+    }
+    return { bg: '#E0F2FE', text: '#0369A1', border: '#7DD3FC' };
+}
+
 function hotlinesHtml(): string {
     const rows = HOTLINES.map(
         (h) => `<tr>
-  <td style="padding:5px 12px 5px 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#A8B0CC;">${escapeHtml(h.label)}</td>
-  <td style="padding:5px 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#FFFFFF;font-weight:bold;white-space:nowrap;">${escapeHtml(h.number)}</td>
+  <td style="padding:8px 12px 8px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:15px;line-height:22px;color:#334155;border-bottom:1px solid #FECACA;">
+    ${escapeHtml(h.label)}
+  </td>
+  <td align="right" style="padding:8px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:16px;line-height:22px;color:#991B1B;font-weight:bold;white-space:nowrap;border-bottom:1px solid #FECACA;">
+    ${escapeHtml(h.number)}
+  </td>
 </tr>`
     ).join('');
+
     return `<tr>
-  <td style="padding:0 32px 8px 32px;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #5A1F1F;border-radius:10px;background-color:#1B1020;">
+  <td style="padding:8px 36px 20px 36px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #FECACA;border-radius:14px;background-color:#FEF2F2;">
       <tr>
-        <td style="padding:14px 16px 6px 16px;font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:bold;color:#FF8A8A;">
-          If the driver may be in danger, call:
+        <td style="padding:20px 24px 10px 24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:17px;font-weight:bold;color:#991B1B;">
+          Emergency Hotlines (If the driver needs help)
         </td>
       </tr>
       <tr>
-        <td style="padding:0 16px 12px 16px;">
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0">${rows}</table>
+        <td style="padding:0 24px 18px 24px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+            ${rows}
+          </table>
         </td>
       </tr>
     </table>
@@ -108,20 +105,9 @@ function hotlinesHtml(): string {
 }
 
 function hotlinesText(): string {
-    return ['EMERGENCY HOTLINES (Philippines)', ...HOTLINES.map((h) => `- ${h.label}: ${h.number}`)].join('\n');
+    return ['EMERGENCY HOTLINES (Philippines)', ...HOTLINES.map((h) => `${h.label}: ${h.number}`)].join('\n');
 }
 
-/**
- * Drowsiness / important system-alert email. Detected events are uploaded from
- * the phone, so they may also cover incidents that were stored offline and
- * flushed once a connection was available. Delivered through Brevo to the
- * account email on file, with no credentials or SMTP details on the client.
- *
- * Returns true only when an email was actually sent. When the recipient is in
- * the cooldown window it returns false WITHOUT sending, so callers must only
- * mark incidents as email_sent on true; the skipped ones are then included in
- * the next email.
- */
 export async function sendEmergencyIncidentEmail(
     to: string,
     driverName: string | null,
@@ -140,24 +126,27 @@ export async function sendEmergencyIncidentEmail(
     // Reserve the cooldown slot now so a parallel sync can't send a duplicate.
     lastSentAt.set(key, Date.now());
 
-    const name = driverName?.trim() || 'A D.R.I.V.E. driver';
+    const rawName = driverName?.trim() || 'A D.R.I.V.E. driver';
+    const name = rawName.charAt(0).toUpperCase() + rawName.slice(1);
     const count = incidents.length;
     const plural = count === 1 ? '' : 's';
     const kind = batchKind(incidents);
     const kindWord = kind === 'drowsiness' ? 'drowsiness' : kind === 'alert' ? 'system' : 'safety';
+
     const heading = kind === 'drowsiness'
-        ? 'Drowsiness detected while driving'
+        ? 'Drowsiness alert while driving'
         : kind === 'alert'
             ? 'System alert while driving'
-            : 'Drowsiness and system alerts detected';
+            : 'Safety alerts while driving';
+
     const subject = kind === 'drowsiness'
-        ? 'D.R.I.V.E. Safety Alert: Drowsiness detected'
-        : kind === 'alert'
-            ? 'D.R.I.V.E. Safety Alert: Driver activity detected'
-            : 'D.R.I.V.E. Safety Alert: Drowsiness and activity detected';
+        ? 'D.R.I.V.E. Safety Alert: Driver Attention Needed'
+        : 'D.R.I.V.E. Safety Alert: Driver Check-In Recommended';
+
+    // Friendly, non-technical summary (hides raw camera/system detection specifics)
     const intro = count === 1
-        ? 'The detected event is listed below with the alert type, time, and trip details.'
-        : 'The detected events are listed below with the alert type, time, and trip details.';
+        ? `Please check in on <strong>${escapeHtml(name)}</strong> when safe. Below are the time and trip details of the alert.`
+        : `Please check in on <strong>${escapeHtml(name)}</strong> when safe. Below are the time and trip details of the alerts.`;
 
     const incidentRows = incidents
         .map((incident) => {
@@ -165,19 +154,31 @@ export async function sendEmergencyIncidentEmail(
                 .map((value) => (value ?? '').trim())
                 .filter((value) => value.length > 0)
                 .map((value) => escapeHtml(value))
-                .join(' · ');
+                .join(' • ');
             const trip = (incident.tripLabel ?? '').trim();
-            const detail = usefulDescription(incident.description);
+            const sev = severityLabel(incident.confidence);
+            const sevStyle = severityColors(incident.confidence);
+            const isDrowsiness = incident.category === 'drowsiness';
+
             return `<tr>
-  <td style="padding:10px 0;border-bottom:1px solid #232A44;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#FFFFFF;">
-    <div style="font-size:11px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;color:${incident.category === 'drowsiness' ? '#FF8A8A' : '#FFC46B'};margin-bottom:2px;">${categoryLabel(incident.category)}</div>
-    <strong>${escapeHtml(describeIncident(incident))}</strong>
-    <span style="color:#FF8A8A;"> · Severity: ${severityLabel(incident.confidence)}</span>
-    ${detail ? `<div style="font-size:12px;color:#A8B0CC;margin-top:4px;">${escapeHtml(detail)}</div>` : ''}
-    ${when ? `<div style="font-size:12px;color:#8B93B8;margin-top:2px;">Detected ${when}</div>` : ''}
-    ${trip ? `<div style="font-size:12px;color:#8B93B8;margin-top:2px;">Trip: ${escapeHtml(trip)}</div>` : ''}
+  <td style="padding:16px 20px;background-color:#F8FAFC;border:1px solid #E2E8F0;border-radius:12px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:17px;font-weight:bold;color:${isDrowsiness ? '#DC2626' : '#D97706'};">
+          ${categoryLabel(incident.category)}
+        </td>
+        <td align="right">
+          <span style="display:inline-block;padding:4px 12px;border-radius:999px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:13px;font-weight:bold;background-color:${sevStyle.bg};color:${sevStyle.text};border:1px solid ${sevStyle.border};">
+            Priority: ${sev}
+          </span>
+        </td>
+      </tr>
+    </table>
+    ${when ? `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:15px;line-height:22px;color:#334155;margin-top:8px;"><strong>Time:</strong> ${when}</div>` : ''}
+    ${trip ? `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:15px;line-height:22px;color:#334155;margin-top:4px;"><strong>Trip:</strong> ${escapeHtml(trip)}</div>` : ''}
   </td>
-</tr>`;
+</tr>
+<tr><td style="height:12px;"></td></tr>`;
         })
         .join('');
 
@@ -188,41 +189,55 @@ export async function sendEmergencyIncidentEmail(
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>${escapeHtml(subject)}</title>
 </head>
-<body style="margin:0;padding:0;background-color:#0B0D17;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0B0D17;">
+<body style="margin:0;padding:0;background-color:#F1F5F9;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F1F5F9;">
     <tr>
-      <td align="center" style="padding:40px 16px;">
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:520px;background-color:#141828;border:1px solid #5A1F1F;border-radius:16px;">
+      <td align="center" style="padding:36px 16px;">
+        <!-- Mas malapad na container (640px) para malaki at madaling basahin -->
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:640px;background-color:#FFFFFF;border:1px solid #E2E8F0;border-radius:20px;overflow:hidden;box-shadow:0 4px 12px rgba(15,23,42,0.06);">
+          <!-- Top Accent Bar -->
           <tr>
-            <td style="padding:28px 32px 8px 32px;font-family:Arial,Helvetica,sans-serif;font-size:20px;font-weight:bold;color:#FFFFFF;letter-spacing:1px;">
-              D.R.I.V.E.
+            <td style="height:6px;background-color:#DC2626;"></td>
+          </tr>
+          <!-- Brand Header -->
+          <tr>
+            <td style="padding:32px 36px 8px 36px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+              <span style="display:inline-block;padding:6px 14px;background-color:#0F172A;color:#FFFFFF;font-size:16px;font-weight:bold;letter-spacing:2px;border-radius:8px;">
+                D.R.I.V.E.
+              </span>
             </td>
           </tr>
+          <!-- Main Heading & Intro -->
           <tr>
-            <td style="padding:8px 32px 0 32px;font-family:Arial,Helvetica,sans-serif;">
-              <h1 style="margin:0;font-size:20px;line-height:26px;color:#FF8A8A;font-weight:bold;">${heading}</h1>
-              <p style="margin:10px 0 0 0;font-size:14px;line-height:21px;color:#A8B0CC;">
-                ${escapeHtml(name)} was flagged by the D.R.I.V.E. on-device safety monitor. ${intro}
+            <td style="padding:16px 36px 8px 36px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+              <h1 style="margin:0;font-size:26px;line-height:34px;color:#DC2626;font-weight:800;">
+                ${heading}
+              </h1>
+              <p style="margin:14px 0 0 0;font-size:16px;line-height:25px;color:#475569;">
+                ${intro}
               </p>
             </td>
           </tr>
+          <!-- Alert Cards (Walang raw detection description) -->
           <tr>
-            <td style="padding:16px 32px 16px 32px;">
+            <td style="padding:20px 36px 12px 36px;">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                 ${incidentRows}
               </table>
             </td>
           </tr>
+          <!-- Emergency Hotlines -->
           ${hotlinesHtml()}
+          <!-- Footer Note -->
           <tr>
-            <td style="padding:12px 32px 28px 32px;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:18px;color:#6E7694;">
+            <td style="padding:12px 36px 36px 36px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:14px;line-height:22px;color:#64748B;">
               ${escapeHtml(SAFETY_NOTE)}
               <br><br>
-              D.R.I.V.E. Safety Team
+              <strong style="color:#334155;">D.R.I.V.E. Safety Team</strong>
             </td>
           </tr>
         </table>
-        <div style="max-width:520px;margin-top:16px;font-family:Arial,Helvetica,sans-serif;font-size:11px;line-height:16px;color:#4C5470;text-align:center;">
+        <div style="max-width:640px;margin-top:18px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:13px;line-height:18px;color:#94A3B8;text-align:center;">
           This is an automated safety message. Please do not reply.
         </div>
       </td>
@@ -235,8 +250,8 @@ export async function sendEmergencyIncidentEmail(
         `D.R.I.V.E. ${kindWord.charAt(0).toUpperCase()}${kindWord.slice(1)} Alert`,
         '',
         `${heading}.`,
-        `${name} was flagged by the D.R.I.V.E. on-device safety monitor.`,
-        `Detected event${plural}:`,
+        `Please check in on ${name} when safe.`,
+        `Alert detail${plural}:`,
         '',
         ...incidents.map((incident) => {
             const when = [incident.date, incident.time]
@@ -244,11 +259,10 @@ export async function sendEmergencyIncidentEmail(
                 .filter((value) => value.length > 0)
                 .join(' at ');
             const trip = (incident.tripLabel ?? '').trim();
-            const detail = usefulDescription(incident.description);
             const lines = [
-                `- [${categoryLabel(incident.category)}] ${describeIncident(incident)} · Severity: ${severityLabel(incident.confidence)}${detail ? ` (${detail})` : ''}`,
+                `[${categoryLabel(incident.category)}] Priority: ${severityLabel(incident.confidence)}`,
             ];
-            if (when) lines.push(`  Detected ${when}`);
+            if (when) lines.push(`  Time: ${when}`);
             if (trip) lines.push(`  Trip: ${trip}`);
             return lines.join('\n');
         }),
