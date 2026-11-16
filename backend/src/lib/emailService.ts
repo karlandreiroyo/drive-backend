@@ -27,11 +27,11 @@ const COOLDOWN_MS = 5 * 60 * 1000;
 const lastSentAt = new Map<string, number>();
 
 const SAFETY_NOTE =
-    'This is an automated safety notification. False alerts can occasionally happen due to road conditions or lighting. ' +
-    'If the driver is safe, no action is needed. Otherwise, please check on them and ensure they get proper rest before continuing their trip.';
+    'This is an automated safety notification. False alerts can occasionally happen due to rough roads, sudden stops, or lighting changes. ' +
+    'If the driver confirms they are safe, no further action is needed. Otherwise, please advise them to pull over and rest before continuing their trip.';
 
 function categoryLabel(category: AlertCategory | undefined): string {
-    return category === 'drowsiness' ? 'Drowsiness Alert' : 'Safety Alert';
+    return category === 'drowsiness' ? 'Drowsiness Alert' : 'System Alert';
 }
 
 /** Overall tone of a batch: drowsiness-only, alert-only, or a mix of both. */
@@ -46,6 +46,7 @@ export function isEmergencyEmailConfigured(): boolean {
     return Boolean(env.brevoApiKey);
 }
 
+/** Safe HTML escaping so copy-pasting never breaks quotes or entities. */
 function escapeHtml(value: string): string {
     return value
         .replace(/&/g, '&' + 'amp;')
@@ -55,6 +56,35 @@ function escapeHtml(value: string): string {
         .replace(/'/g, '&' + '#39;');
 }
 
+/**
+ * Detailed, user-friendly warning explanation instead of vague system labels.
+ */
+function describeIncident(incident: EmergencyIncident): { headline: string; guidance: string } {
+    const type = (incident.incidentType ?? '').trim().toLowerCase();
+
+    if (type === 'drowsiness' || incident.category === 'drowsiness') {
+        return {
+            headline: 'Possible Driver Drowsiness or Fatigue',
+            guidance:
+                'The driver showed signs of prolonged stillness or reduced alertness while on the road. Please check in on them to make sure they are awake and able to take a safe rest stop.',
+        };
+    }
+
+    if (type === 'motion') {
+        return {
+            headline: 'Abrupt or Unusual Activity During Drive',
+            guidance:
+                'A sudden or sharp shift was recorded during the trip, which may happen during hard braking, swerving, or bumpy road conditions. Please reach out to confirm the driver is safe.',
+        };
+    }
+
+    return {
+        headline: 'Unusual Driving Activity Flagged',
+        guidance:
+            'The safety monitor noticed an irregular event during the trip that may require attention. Please contact the driver when safe to verify their condition.',
+    };
+}
+
 /** Low / Medium / High wording. */
 function severityLabel(confidence: number): string {
     if (confidence >= 0.8) return 'High';
@@ -62,23 +92,23 @@ function severityLabel(confidence: number): string {
     return 'Low';
 }
 
-function severityColors(confidence: number): { bg: string; text: string; border: string } {
+function severityBadgeStyle(confidence: number): string {
     if (confidence >= 0.8) {
-        return { bg: '#FEE2E2', text: '#B91C1C', border: '#FCA5A5' };
+        return 'background-color:#3B151E;color:#FF8A8A;border:1px solid #7F2433;';
     }
     if (confidence >= 0.5) {
-        return { bg: '#FEF3C7', text: '#B45309', border: '#FCD34D' };
+        return 'background-color:#382812;color:#FFD07B;border:1px solid #75511E;';
     }
-    return { bg: '#E0F2FE', text: '#0369A1', border: '#7DD3FC' };
+    return 'background-color:#132B3A;color:#7DD3FC;border:1px solid #225473;';
 }
 
 function hotlinesHtml(): string {
     const rows = HOTLINES.map(
         (h) => `<tr>
-  <td style="padding:8px 12px 8px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:15px;line-height:22px;color:#334155;border-bottom:1px solid #FECACA;">
+  <td style="padding:8px 14px 8px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:15px;line-height:22px;color:#CBD5E1;border-bottom:1px solid #3A1D28;">
     ${escapeHtml(h.label)}
   </td>
-  <td align="right" style="padding:8px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:16px;line-height:22px;color:#991B1B;font-weight:bold;white-space:nowrap;border-bottom:1px solid #FECACA;">
+  <td align="right" style="padding:8px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:15px;line-height:22px;color:#FFFFFF;font-weight:bold;white-space:nowrap;border-bottom:1px solid #3A1D28;">
     ${escapeHtml(h.number)}
   </td>
 </tr>`
@@ -86,10 +116,10 @@ function hotlinesHtml(): string {
 
     return `<tr>
   <td style="padding:8px 36px 20px 36px;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #FECACA;border-radius:14px;background-color:#FEF2F2;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #69232B;border-radius:14px;background-color:#1E111B;">
       <tr>
-        <td style="padding:20px 24px 10px 24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:17px;font-weight:bold;color:#991B1B;">
-          Emergency Hotlines (If the driver needs help)
+        <td style="padding:20px 24px 10px 24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:16px;font-weight:bold;color:#FF8A8A;">
+          If the driver may be in danger, call:
         </td>
       </tr>
       <tr>
@@ -143,10 +173,9 @@ export async function sendEmergencyIncidentEmail(
         ? 'D.R.I.V.E. Safety Alert: Driver Attention Needed'
         : 'D.R.I.V.E. Safety Alert: Driver Check-In Recommended';
 
-    // Friendly, non-technical summary (hides raw camera/system detection specifics)
     const intro = count === 1
-        ? `Please check in on <strong>${escapeHtml(name)}</strong> when safe. Below are the time and trip details of the alert.`
-        : `Please check in on <strong>${escapeHtml(name)}</strong> when safe. Below are the time and trip details of the alerts.`;
+        ? `<strong style="color:#FFFFFF;">${escapeHtml(name)}</strong> triggered a safety check while on the road. Review the details below and reach out to confirm they are safe.`
+        : `<strong style="color:#FFFFFF;">${escapeHtml(name)}</strong> triggered multiple safety checks while on the road. Review the details below and reach out to confirm they are safe.`;
 
     const incidentRows = incidents
         .map((incident) => {
@@ -157,28 +186,36 @@ export async function sendEmergencyIncidentEmail(
                 .join(' • ');
             const trip = (incident.tripLabel ?? '').trim();
             const sev = severityLabel(incident.confidence);
-            const sevStyle = severityColors(incident.confidence);
             const isDrowsiness = incident.category === 'drowsiness';
+            const info = describeIncident(incident);
 
             return `<tr>
-  <td style="padding:16px 20px;background-color:#F8FAFC;border:1px solid #E2E8F0;border-radius:12px;">
+  <td style="padding:20px 22px;background-color:#1A2035;border:1px solid #2B3452;border-radius:12px;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
       <tr>
-        <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:17px;font-weight:bold;color:${isDrowsiness ? '#DC2626' : '#D97706'};">
+        <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:13px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;color:${isDrowsiness ? '#FF8A8A' : '#FFD07B'};">
           ${categoryLabel(incident.category)}
         </td>
         <td align="right">
-          <span style="display:inline-block;padding:4px 12px;border-radius:999px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:13px;font-weight:bold;background-color:${sevStyle.bg};color:${sevStyle.text};border:1px solid ${sevStyle.border};">
-            Priority: ${sev}
+          <span style="display:inline-block;padding:4px 12px;border-radius:999px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:13px;font-weight:bold;${severityBadgeStyle(incident.confidence)}">
+            Severity: ${sev}
           </span>
         </td>
       </tr>
     </table>
-    ${when ? `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:15px;line-height:22px;color:#334155;margin-top:8px;"><strong>Time:</strong> ${when}</div>` : ''}
-    ${trip ? `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:15px;line-height:22px;color:#334155;margin-top:4px;"><strong>Trip:</strong> ${escapeHtml(trip)}</div>` : ''}
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:18px;line-height:24px;font-weight:bold;color:#FFFFFF;margin-top:8px;">
+      ${escapeHtml(info.headline)}
+    </div>
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:15px;line-height:22px;color:#CBD5E1;margin-top:6px;">
+      ${escapeHtml(info.guidance)}
+    </div>
+    <div style="margin-top:12px;padding-top:10px;border-top:1px solid #2B3452;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:14px;line-height:21px;color:#94A3B8;">
+      ${when ? `<div><strong style="color:#CBD5E1;">Detected:</strong> ${when}</div>` : ''}
+      ${trip ? `<div style="margin-top:2px;"><strong style="color:#CBD5E1;">Trip:</strong> ${escapeHtml(trip)}</div>` : ''}
+    </div>
   </td>
 </tr>
-<tr><td style="height:12px;"></td></tr>`;
+<tr><td style="height:14px;"></td></tr>`;
         })
         .join('');
 
@@ -189,55 +226,43 @@ export async function sendEmergencyIncidentEmail(
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>${escapeHtml(subject)}</title>
 </head>
-<body style="margin:0;padding:0;background-color:#F1F5F9;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F1F5F9;">
+<body style="margin:0;padding:0;background-color:#0B0E18;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0B0E18;">
     <tr>
-      <td align="center" style="padding:36px 16px;">
-        <!-- Mas malapad na container (640px) para malaki at madaling basahin -->
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:640px;background-color:#FFFFFF;border:1px solid #E2E8F0;border-radius:20px;overflow:hidden;box-shadow:0 4px 12px rgba(15,23,42,0.06);">
-          <!-- Top Accent Bar -->
+      <td align="center" style="padding:40px 16px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:640px;background-color:#14192B;border:1px solid #69232B;border-radius:18px;">
           <tr>
-            <td style="height:6px;background-color:#DC2626;"></td>
-          </tr>
-          <!-- Brand Header -->
-          <tr>
-            <td style="padding:32px 36px 8px 36px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
-              <span style="display:inline-block;padding:6px 14px;background-color:#0F172A;color:#FFFFFF;font-size:16px;font-weight:bold;letter-spacing:2px;border-radius:8px;">
-                D.R.I.V.E.
-              </span>
+            <td style="padding:32px 36px 8px 36px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:24px;font-weight:bold;color:#FFFFFF;letter-spacing:1.5px;">
+              D.R.I.V.E.
             </td>
           </tr>
-          <!-- Main Heading & Intro -->
           <tr>
-            <td style="padding:16px 36px 8px 36px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
-              <h1 style="margin:0;font-size:26px;line-height:34px;color:#DC2626;font-weight:800;">
+            <td style="padding:10px 36px 0 36px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+              <h1 style="margin:0;font-size:26px;line-height:34px;color:#FF8A8A;font-weight:bold;">
                 ${heading}
               </h1>
-              <p style="margin:14px 0 0 0;font-size:16px;line-height:25px;color:#475569;">
+              <p style="margin:14px 0 0 0;font-size:16px;line-height:25px;color:#CBD5E1;">
                 ${intro}
               </p>
             </td>
           </tr>
-          <!-- Alert Cards (Walang raw detection description) -->
           <tr>
-            <td style="padding:20px 36px 12px 36px;">
+            <td style="padding:22px 36px 12px 36px;">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
                 ${incidentRows}
               </table>
             </td>
           </tr>
-          <!-- Emergency Hotlines -->
           ${hotlinesHtml()}
-          <!-- Footer Note -->
           <tr>
-            <td style="padding:12px 36px 36px 36px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:14px;line-height:22px;color:#64748B;">
+            <td style="padding:12px 36px 34px 36px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:14px;line-height:22px;color:#94A3B8;">
               ${escapeHtml(SAFETY_NOTE)}
               <br><br>
-              <strong style="color:#334155;">D.R.I.V.E. Safety Team</strong>
+              <strong style="color:#CBD5E1;">D.R.I.V.E. Safety Team</strong>
             </td>
           </tr>
         </table>
-        <div style="max-width:640px;margin-top:18px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:13px;line-height:18px;color:#94A3B8;text-align:center;">
+        <div style="max-width:640px;margin-top:18px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;font-size:13px;line-height:18px;color:#64748B;text-align:center;">
           This is an automated safety message. Please do not reply.
         </div>
       </td>
@@ -250,7 +275,7 @@ export async function sendEmergencyIncidentEmail(
         `D.R.I.V.E. ${kindWord.charAt(0).toUpperCase()}${kindWord.slice(1)} Alert`,
         '',
         `${heading}.`,
-        `Please check in on ${name} when safe.`,
+        `${name} triggered a safety check while on the road. Review the details below and reach out to confirm they are safe.`,
         `Alert detail${plural}:`,
         '',
         ...incidents.map((incident) => {
@@ -259,10 +284,12 @@ export async function sendEmergencyIncidentEmail(
                 .filter((value) => value.length > 0)
                 .join(' at ');
             const trip = (incident.tripLabel ?? '').trim();
+            const info = describeIncident(incident);
             const lines = [
-                `[${categoryLabel(incident.category)}] Priority: ${severityLabel(incident.confidence)}`,
+                `[${categoryLabel(incident.category)}] ${info.headline} (Severity: ${severityLabel(incident.confidence)})`,
+                `  ${info.guidance}`,
             ];
-            if (when) lines.push(`  Time: ${when}`);
+            if (when) lines.push(`  Detected: ${when}`);
             if (trip) lines.push(`  Trip: ${trip}`);
             return lines.join('\n');
         }),
