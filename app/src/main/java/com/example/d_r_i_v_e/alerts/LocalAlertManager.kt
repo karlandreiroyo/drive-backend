@@ -85,13 +85,37 @@ class LocalAlertManager(context: Context) {
         // Fired before the main-thread hop so a BLE/OTG peripheral reacts even
         // if the UI thread is busy.
         HardwareAlertRegistry.fire(label, confidence)
-        val percent = (confidence.coerceIn(0f, 1f) * 100).toInt()
-        val message = "Warning! $label detected, $percent percent confidence"
+
+        // Pinalitan ang raw confidence text ng user-friendly speech message
+        val message = getFriendlySpeechMessage(label, confidence)
+
         mainHandler.post {
             if (released.get()) return@post
             playAlertTone()
             speak(message)
             vibrate()
+        }
+    }
+
+    /**
+     * Gumagawa ng user-friendly na boses/speech message na walang porsyento o confidence.
+     */
+    private fun getFriendlySpeechMessage(incidentType: String, confidence: Float): String {
+        val type = incidentType.trim().lowercase()
+        return when {
+            type.contains("drowsiness") || type.contains("eyes") -> {
+                if (confidence >= 0.7f) "Warning. Microsleep detected."
+                else if (confidence >= 0.4f) "Warning. Signs of fatigue observed."
+                else "Warning. Driver attention low."
+            }
+            type.contains("motion") -> {
+                if (confidence >= 0.7f) "Warning. Sudden harsh movement detected."
+                else "Warning. Unusual motion noticed."
+            }
+            else -> {
+                if (confidence >= 0.7f) "Warning. High-priority safety alert."
+                else "Warning. Driver check-in recommended."
+            }
         }
     }
 
