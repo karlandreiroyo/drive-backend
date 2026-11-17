@@ -2,10 +2,10 @@ import crypto from "crypto";
 import { supabase } from "../lib/supabase.js";
 import { env } from "../config/env.js";
 
-export type OtpPurpose = "signup" | "reset";
+export type OtpPurpose = "signup" | "reset" | "edit_profile";
 export type OtpChannel = "email" | "sms";
 
-// Strict TTL for both signup and password-reset codes.
+// Strict TTL for signup, password-reset, and profile-update codes.
 const OTP_TTL_MINUTES = 10;
 const RESEND_COOLDOWN_SECONDS = 60;
 
@@ -16,14 +16,19 @@ type EmailContent = {
 };
 
 export function buildOtpEmail(purpose: OtpPurpose, code: string): EmailContent {
-  const isReset = purpose === "reset";
-  const title = isReset ? "Password reset code" : "Verify your account";
-  const lead = isReset
-    ? "We received a request to reset your D.R.I.V.E. password. Enter the code below in the app to continue."
-    : "Welcome to D.R.I.V.E. Enter the code below in the app to verify your account.";
-  const subject = isReset
-    ? "Your D.R.I.V.E. password reset code"
-    : "Your D.R.I.V.E. verification code";
+  let title = "Verify your account";
+  let lead = "Welcome to D.R.I.V.E. Enter the code below in the app to verify your account.";
+  let subject = "Your D.R.I.V.E. verification code";
+
+  if (purpose === "reset") {
+    title = "Password reset code";
+    lead = "We received a request to reset your D.R.I.V.E. password. Enter the code below in the app to continue.";
+    subject = "Your D.R.I.V.E. password reset code";
+  } else if (purpose === "edit_profile") {
+    title = "Profile update verification code";
+    lead = "We received a request to edit your D.R.I.V.E. account information. Enter the code below in the app to unlock and update your profile.";
+    subject = "Your D.R.I.V.E. profile update verification code";
+  }
 
   const html = `<!DOCTYPE html>
 <html lang="en">
@@ -298,7 +303,12 @@ export async function createAndSendOtp(
   // 4. Deliver the code through the requested channel
   let sent = false;
   if (channel === "sms") {
-    const sms = `D.R.I.V.E. ${purpose === "signup" ? "verification" : "password reset"} code: ${code}. Expires in ${OTP_TTL_MINUTES} minutes.`;
+    const smsLabel = purpose === "signup"
+      ? "verification"
+      : purpose === "edit_profile"
+        ? "profile update"
+        : "password reset";
+    const sms = `D.R.I.V.E. ${smsLabel} code: ${code}. Expires in ${OTP_TTL_MINUTES} minutes.`;
     console.log(`[createAndSendOtp] Invoking sendSms for ${identifier}...`);
     sent = await sendSms(identifier, sms);
   } else {
@@ -343,8 +353,6 @@ export async function checkCode(
     return { ok: false, status: 500, message: "Server error. Please try again." };
   }
   if (!row) {
-    // Distinguish "already consumed" from "never issued" so the client shows
-    // an accurate message instead of a generic failure.
     const { data: latest } = await supabase
       .from("verification_codes")
       .select("used, expires_at")
@@ -360,8 +368,6 @@ export async function checkCode(
     return { ok: false, status: 400, message: "No active code. Please request a new one." };
   }
   if (new Date(row.expires_at).getTime() < Date.now()) {
-    // Invalidate the expired row so the same code can never be reused and the
-    // next request starts from a clean slate.
     const { error: expireError } = await supabase
       .from("verification_codes")
       .update({ used: true })

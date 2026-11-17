@@ -3,6 +3,7 @@ import bcrypt from 'bcrypt';
 import { supabase } from './supabaseclient.js';
 import { createAndSendOtp } from './otpService.js';
 import { signAuthToken } from '../lib/jwt.js';
+import { requireAuth, AuthenticatedRequest } from '../middleware/requireAuth.js';
 
 const router: Router = Router();
 
@@ -167,7 +168,6 @@ router.post('/login', async (req: Request, res: Response): Promise<Response> => 
         const inputPassword = String(password).trim();
 
         // --- HARDCODED TEST ACCOUNT FOR INSTANT TESTING ---
-        // Fixed UUID so offline trips/incidents satisfy the UUID user_id schema.
         const TEST_USER_ID = '00000000-0000-4000-8000-000000000000';
         if (
             (normalizedEmail === 'driver@vigil.com' || normalizedEmail === 'test@vigil.com') &&
@@ -232,6 +232,117 @@ router.post('/login', async (req: Request, res: Response): Promise<Response> => 
 
     } catch (err: any) {
         console.error('Login exception error:', err);
+        return res.status(500).json({
+            success: false,
+            message: 'Server error: ' + (err.message || 'An unexpected error occurred')
+        });
+    }
+});
+
+/**
+ * @route   PUT /api/auth/profile
+ * @desc    Update authenticated driver's profile in Supabase `users` table
+ * @access  Private (Bearer JWT)
+ */
+router.put('/profile', requireAuth, async (req: AuthenticatedRequest, res: Response): Promise<Response> => {
+    try {
+        const userId = req.auth?.userId || String(req.body.id ?? '').trim();
+        if (!userId) {
+            return res.status(401).json({ success: false, message: 'Authentication required.' });
+        }
+
+        const {
+            fullName,
+            email,
+            phoneNumber,
+            emergencyName,
+            emergencyPhone,
+            vehicleType,
+            plateNumber
+        } = req.body;
+
+        if (!fullName || typeof fullName !== 'string' || !fullName.trim()) {
+            return res.status(400).json({ success: false, message: 'Full name is required.' });
+        }
+
+        if (!email || typeof email !== 'string' || !isValidEmail(email.trim())) {
+            return res.status(400).json({ success: false, message: 'Invalid email address format.' });
+        }
+
+        const trimmedPhone = typeof phoneNumber === 'string' ? phoneNumber.trim() : '';
+        if (!trimmedPhone || !isPHPhoneNumber(trimmedPhone)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid Philippine phone number format. Must start with 09 or +639 followed by 9 digits.'
+            });
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+
+        // Check if another user already owns the new email or phone number
+        const { data: conflictUser, error: conflictError } = await supabase
+            .from('users')
+            .select('id, email, phone_number')
+            .neq('id', userId)
+            .or(`email.eq.${normalizedEmail},phone_number.eq.${trimmedPhone}`)
+            .maybeSingle();
+
+        if (conflictError) {
+            console.error('Supabase profile conflict check error:', conflictError);
+            return res.status(500).json({ success: false, message: 'Database error occurred.' });
+        }
+
+        if (conflictUser) {
+            if (conflictUser.email?.toLowerCase() === normalizedEmail) {
+                return res.status(409).json({ success: false, message: 'Email is already in use by another account.' });
+            }
+            if (conflictUser.phone_number === trimmedPhone) {
+                return res.status(409).json({ success: false, message: 'Phone number is already in use by another account.' });
+            }
+        }
+
+        const updatePayload = {
+            full_name: fullName.trim(),
+            email: normalizedEmail,
+            phone_number: trimmedPhone,
+            emergency_name: (emergencyName && String(emergencyName).trim()) ? String(emergencyName).trim() : 'N/A',
+            emergency_phone: (emergencyPhone && String(emergencyPhone).trim()) ? String(emergencyPhone).trim() : 'N/A',
+            vehicle_type: (vehicleType && String(vehicleType).trim()) ? String(vehicleType).trim() : 'N/A',
+            plate_number: (plateNumber && String(plateNumber).trim()) ? String(plateNumber).trim() : 'N/A'
+        };
+
+        const { data: updatedUser, error: updateError } = await supabase
+            .from('users')
+            .update(updatePayload)
+            .eq('id', userId)
+            .select('*')
+            .single();
+
+        if (updateError || !updatedUser) {
+            console.error('Supabase profile update error:', updateError);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to update profile: ' + (updateError?.message || 'User not found')
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: 'Profile updated successfully!',
+            user: {
+                id: String(updatedUser.id),
+                fullName: updatedUser.full_name,
+                email: updatedUser.email,
+                phoneNumber: updatedUser.phone_number,
+                vehicleType: updatedUser.vehicle_type,
+                plateNumber: updatedUser.plate_number,
+                emergencyName: updatedUser.emergency_name,
+                emergencyPhone: updatedUser.emergency_phone,
+                isVerified: Boolean(updatedUser.is_verified)
+            }
+        });
+    } catch (err: any) {
+        console.error('Update profile exception error:', err);
         return res.status(500).json({
             success: false,
             message: 'Server error: ' + (err.message || 'An unexpected error occurred')

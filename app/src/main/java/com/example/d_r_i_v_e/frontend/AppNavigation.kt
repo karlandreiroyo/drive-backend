@@ -264,15 +264,10 @@ fun AppNavigation() {
                 },
                 onVerifyClick = { code ->
                     otpCode = code
-                    val serverPurpose = if (otpPurpose == "edit_profile") "reset" else otpPurpose
-                    otpViewModel.verify(otpIdentifier, code, serverPurpose)
+                    otpViewModel.verify(otpIdentifier, code, otpPurpose)
                 },
                 onResendClick = {
-                    if (otpPurpose == "edit_profile") {
-                        otpViewModel.forgotPassword(otpIdentifier)
-                    } else {
-                        otpViewModel.resend(otpIdentifier, otpPurpose)
-                    }
+                    otpViewModel.resend(otpIdentifier, otpPurpose)
                 }
             )
         }
@@ -380,7 +375,7 @@ fun AppNavigation() {
                 otpPurpose = "edit_profile"
                 otpCode = ""
                 awaitingProfileOtp = true
-                otpViewModel.forgotPassword(otpIdentifier)
+                otpViewModel.resend(otpIdentifier, "edit_profile")
             },
             onLockReset = { isProfileEditUnlocked = false },
             onBackClick = { goBack() },

@@ -9,7 +9,8 @@ import { requireAuth, AuthenticatedRequest } from '../middleware/requireAuth.js'
 
 const router = Router();
 
-const isPurpose = (p: unknown): p is OtpPurpose => p === 'signup' || p === 'reset';
+const isPurpose = (p: unknown): p is OtpPurpose =>
+    p === 'signup' || p === 'reset' || p === 'edit_profile';
 
 type UserRow = {
     id: string | number;
@@ -23,8 +24,6 @@ function readIdentifier(body: Record<string, unknown>): string {
     return String(raw).trim();
 }
 
-// PostgREST passes the operand of `ilike` straight to SQL LIKE, so wildcards
-// present in the address itself must be escaped to keep the match literal.
 const escapeLikePattern = (value: string) => value.replace(/[\\%_]/g, (m) => `\\${m}`);
 
 async function findUserByIdentifier(
@@ -73,7 +72,8 @@ router.post('/verify-otp', async (req, res) => {
             });
         }
 
-        const result = await checkCode(resolved.identifier, code, purpose, purpose === 'signup');
+        const shouldConsume = purpose === 'signup' || purpose === 'edit_profile';
+        const result = await checkCode(resolved.identifier, code, purpose, shouldConsume);
         if (!result.ok) return res.status(result.status).json({ success: false, message: result.message });
 
         if (purpose === 'signup') {
@@ -95,12 +95,12 @@ router.post('/verify-otp', async (req, res) => {
 
         return res.json({
             success: true,
-            message: purpose === 'signup' ? 'Email verified successfully!' : 'Code verified.',
-            // Canonical form of what was verified, so the client never has to
-            // guess how the user typed the address.
+            message: purpose === 'signup'
+                ? 'Email verified successfully!'
+                : purpose === 'edit_profile'
+                    ? 'Identity verified! You can now edit your information.'
+                    : 'Code verified.',
             identifier: resolved.identifier,
-            // Proof of verification for the reset flow; the client sends this
-            // back to /reset-password instead of the identifier + code.
             resetToken: purpose === 'reset' ? signResetToken(resolved.identifier) : undefined,
         });
     } catch (e) {
@@ -204,12 +204,6 @@ router.post('/reset-password', async (req, res) => {
         const resetToken = String(req.body.resetToken ?? '').trim();
         const code = String(req.body.code ?? '').trim();
 
-        console.log(
-            `[reset-password] payload: identifier="${readIdentifier(req.body)}", ` +
-            `codeLength=${code.length}, hasResetToken=${Boolean(resetToken)}, ` +
-            `passwordLength=${newPassword.length}`
-        );
-
         const pwErr = passwordError(newPassword);
         if (pwErr) {
             return res.status(400).json({ success: false, code: 'WEAK_PASSWORD', message: pwErr });
@@ -218,8 +212,6 @@ router.post('/reset-password', async (req, res) => {
         let resolved: ResolvedIdentifier | null = null;
 
         if (resetToken) {
-            // Preferred path: the OTP was already verified and signed into a
-            // short-lived token, so no verification_codes lookup can fail here.
             try {
                 resolved = resolveIdentifier(verifyResetToken(resetToken).identifier);
             } catch {
@@ -237,15 +229,9 @@ router.post('/reset-password', async (req, res) => {
                     message: 'The verified email or phone number is not valid.',
                 });
             }
-            console.log(`[reset-password] Using verified reset token (${resolved.kind}).`);
         } else {
-            // Legacy path for older app builds that only send identifier + code.
             resolved = resolveIdentifier(readIdentifier(req.body));
             if (!resolved || !/^\d{6}$/.test(code)) {
-                console.warn(
-                    `[reset-password] Missing reset credentials: ` +
-                    `identifier="${readIdentifier(req.body)}", codeLength=${code.length}.`
-                );
                 return res.status(400).json({
                     success: false,
                     code: 'MISSING_RESET_CREDENTIALS',
@@ -263,11 +249,6 @@ router.post('/reset-password', async (req, res) => {
             }
         }
 
-        console.log(
-            `[reset-password] Resolved ${resolved.kind} "${resolved.identifier}" ` +
-            `via ${resetToken ? 'reset token' : 'identifier + code'}.`
-        );
-
         const { user, error: lookupError } = await findUserByIdentifier(resolved);
         if (lookupError) {
             console.error('[reset-password] User lookup failed:', lookupError);
@@ -278,15 +259,12 @@ router.post('/reset-password', async (req, res) => {
             });
         }
         if (!user) {
-            console.warn(`[reset-password] No user row matches ${resolved.kind} "${resolved.identifier}".`);
             return res.status(404).json({
                 success: false,
                 code: 'ACCOUNT_NOT_FOUND',
                 message: 'No account found for that email or phone number.',
             });
         }
-
-        console.log(`[reset-password] Updating password for user ${user.id} (${user.email}).`);
 
         const hashed = await bcrypt.hash(newPassword, 10);
         const { data, error } = await supabase
@@ -304,9 +282,6 @@ router.post('/reset-password', async (req, res) => {
             });
         }
         if (!data || data.length === 0) {
-            // `select('id')` after an update can come back empty when the
-            // RETURNING clause is filtered by RLS even though the write landed,
-            // so confirm against the stored hash before reporting failure.
             const { data: saved } = await supabase
                 .from('users')
                 .select('password')
@@ -317,10 +292,6 @@ router.post('/reset-password', async (req, res) => {
                 return res.json({ success: true, message: 'Password updated. You can now log in.' });
             }
 
-            // The row was just read successfully and Supabase raised no error,
-            // so zero affected rows means the request ran without write
-            // permission (anon key or a restrictive RLS policy), not that the
-            // account is missing.
             console.error(
                 `[reset-password] UPDATE affected 0 rows for user ${user.id}. ` +
                 `Supabase key role in use: ${env.supabaseKeyRole ?? 'unknown (non-JWT key)'}. ` +
