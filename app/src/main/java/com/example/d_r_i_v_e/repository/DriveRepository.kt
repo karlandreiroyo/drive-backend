@@ -428,8 +428,15 @@ private fun Long.toUtcIso(): String =
         .apply { timeZone = TimeZone.getTimeZone("UTC") }
         .format(Date(this))
 
+private const val PARSE_TAG = "DriveRepository"
+
 private fun RemoteTripDto.toEntity(): TripEntity {
-    val startMillis = startTime.toEpochMillis(System.currentTimeMillis())
+    val createdMillis = createdAt.toEpochMillisOrNull()
+    // Huwag gumamit ng oras ngayon bilang fallback. Mas tama ang created_at ng server.
+    val startMillis = startTime.toEpochMillisOrNull() ?: createdMillis ?: run {
+        Log.w(PARSE_TAG, "Trip $id has no parseable start/created time: start='$startTime' created='$createdAt'")
+        0L
+    }
     return TripEntity(
         id = id,
         userId = userId,
@@ -438,15 +445,15 @@ private fun RemoteTripDto.toEntity(): TripEntity {
         status = status?.takeIf { it.isNotBlank() } ?: TripEntity.STATUS_COMPLETED,
         origin = origin ?: "",
         destination = destination ?: "",
-        createdAt = createdAt.toEpochMillis(startMillis),
+        createdAt = createdMillis ?: startMillis,
         isSynced = true,
         isDeleted = false
     )
 }
 
 private fun RemoteIncidentDto.toEntity(): TripIncidentEntity {
-    val deviceMillis = if (deviceTimestamp > 0) deviceTimestamp
-    else createdAt.toEpochMillis(System.currentTimeMillis())
+    val createdMillis = createdAt.toEpochMillisOrNull()
+    val deviceMillis = if (deviceTimestamp > 0) deviceTimestamp else createdMillis ?: 0L
     return TripIncidentEntity(
         id = id,
         tripId = tripId,
@@ -458,7 +465,7 @@ private fun RemoteIncidentDto.toEntity(): TripIncidentEntity {
         deviceTimestamp = deviceMillis,
         isSynced = true,
         emailSent = emailSent,
-        createdAt = createdAt.toEpochMillis(deviceMillis)
+        createdAt = createdMillis ?: deviceMillis
     )
 }
 
@@ -467,32 +474,40 @@ private fun String?.toEpochMillisOrNull(): Long? {
     return parseIsoMillis(this)
 }
 
-private fun String?.toEpochMillis(fallback: Long): Long {
-    if (this.isNullOrBlank()) return fallback
-    return parseIsoMillis(this) ?: fallback
-}
-
 /**
- * PostgREST emits timestamptz as ISO-8601 with a +00:00 offset (or Z) and a
- * variable-length fraction. java.time needs API 26, so normalize the fraction to
- * three digits and the offset to ±HHMM, then parse with SimpleDateFormat.
+ * Tumatanggap ng: epoch (sec/ms), "2026-11-16T10:41:41Z", "...+00:00",
+ * "2026-11-16 10:41:41+00" (Postgres style), at walang timezone (ituturing na UTC).
  */
 private fun parseIsoMillis(value: String): Long? {
-    val normalized = value.trim()
-        .replace(Regex("\\.(\\d+)")) { "." + it.groupValues[1].take(3).padEnd(3, '0') }
-        .replace("Z", "+0000")
-        .replace(Regex("([+-]\\d{2}):(\\d{2})$"), "$1$2")
+    val raw = value.trim()
+    if (raw.isEmpty()) return null
+
+    raw.toLongOrNull()?.let { return if (it < 10_000_000_000L) it * 1000 else it }
+
+    var s = raw.replace(' ', 'T')
+    if ('T' !in s) return null
+    s = s.replace(Regex("\\.(\\d+)")) { "." + it.groupValues[1].take(3).padEnd(3, '0') }
+    s = when {
+        s.endsWith("Z", ignoreCase = true) -> s.dropLast(1) + "+0000"
+        Regex("[+-]\\d{2}:\\d{2}$").containsMatchIn(s) ->
+            s.replace(Regex("([+-]\\d{2}):(\\d{2})$"), "$1$2")
+        Regex("[+-]\\d{2}$").containsMatchIn(s) -> s + "00"
+        else -> s + "+0000"
+    }
+
     val patterns = listOf(
         "yyyy-MM-dd'T'HH:mm:ss.SSSZ",
-        "yyyy-MM-dd'T'HH:mm:ssZ"
+        "yyyy-MM-dd'T'HH:mm:ssZ",
+        "yyyy-MM-dd'T'HH:mmZ"
     )
     for (pattern in patterns) {
         val parsed = runCatching {
             SimpleDateFormat(pattern, Locale.US)
                 .apply { timeZone = TimeZone.getTimeZone("UTC"); isLenient = false }
-                .parse(normalized)
+                .parse(s)
         }.getOrNull()
         if (parsed != null) return parsed.time
     }
+    Log.w(PARSE_TAG, "Unparseable timestamp: '$value'")
     return null
 }

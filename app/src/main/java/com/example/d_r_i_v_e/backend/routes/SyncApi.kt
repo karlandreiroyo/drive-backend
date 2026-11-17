@@ -69,7 +69,8 @@ sealed interface SyncOutcome {
 data class RemoteTripDto(
     @SerializedName("id") val id: String,
     @SerializedName("user_id") val userId: String,
-    @SerializedName("start_time") val startTime: String,
+    // Nullable: Gson can inject null even for non-null Kotlin types.
+    @SerializedName("start_time") val startTime: String? = null,
     @SerializedName("end_time") val endTime: String? = null,
     @SerializedName("status") val status: String? = null,
     @SerializedName("origin") val origin: String? = null,
@@ -188,6 +189,15 @@ object SyncApiClient {
                 response.isSuccessful -> {
                     val body = response.body()
                     if (body?.success == true) {
+                        // DEBUG: ipakita ang raw timestamps na galing sa server
+                        body.trips.take(3).forEach { t ->
+                            Log.d(
+                                TAG,
+                                "History trip ${t.id}: start_time='${t.startTime}' " +
+                                        "end_time='${t.endTime}' created_at='${t.createdAt}'"
+                            )
+                        }
+                        Log.d(TAG, "History loaded: ${body.trips.size} trips")
                         HistoryOutcome.Success(body)
                     } else {
                         HistoryOutcome.Failed(body?.message ?: "The server rejected the history request.")

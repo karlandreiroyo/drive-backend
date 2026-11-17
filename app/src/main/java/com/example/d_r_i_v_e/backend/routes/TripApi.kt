@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 
 data class TripHistoryUiState(
     val isLoading: Boolean = true,
@@ -54,14 +55,23 @@ class TripHistoryViewModel(application: Application) : AndroidViewModel(applicat
             observeJob = viewModelScope.launch {
                 repository.observeHistory(userId).collect { rows ->
                     _state.update { state ->
-                        state.copy(isLoading = false, trips = rows.map { it.toTripEntry() })
+                        state.copy(
+                            isLoading = false,
+                            trips = rows
+                                .sortedByDescending { it.effectiveStart() }
+                                .map { it.toTripEntry() }
+                        )
                     }
                 }
             }
             archiveObserveJob = viewModelScope.launch {
                 repository.observeArchived(userId).collect { rows ->
                     _state.update { state ->
-                        state.copy(archivedTrips = rows.map { it.toTripEntry() })
+                        state.copy(
+                            archivedTrips = rows
+                                .sortedByDescending { it.effectiveStart() }
+                                .map { it.toTripEntry() }
+                        )
                     }
                 }
             }
@@ -124,22 +134,50 @@ class TripHistoryViewModel(application: Application) : AndroidViewModel(applicat
     }
 }
 
-private fun TripWithIncidents.toTripEntry(): TripEntry = TripEntry(
-    id = trip.id,
-    dateLabel = SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.US)
-        .format(Date(trip.startTime)),
-    totalDuration = formatDurationText(trip.startTime, trip.endTime),
-    incidents = incidents
-        .sortedBy { it.deviceTimestamp }
-        .map {
-            Incident(
-                description = it.description,
-                time = it.time,
-                type = it.incidentType,
-                confidence = it.confidence
-            )
-        }
-)
+private fun TripWithIncidents.toTripEntry(): TripEntry {
+    val effectiveStart = effectiveStart()
+    if (effectiveStart != trip.startTime) {
+        Log.w(
+            "TripHistoryViewModel",
+            "Trip ${trip.id}: startTime ${trip.startTime} is later than its first incident; " +
+                    "using $effectiveStart instead"
+        )
+    }
+
+    return TripEntry(
+        id = trip.id,
+        dateLabel = formatTripDate(effectiveStart),
+        totalDuration = formatDurationText(effectiveStart, trip.endTime),
+        incidents = incidents
+            .sortedBy { it.deviceTimestamp }
+            .map {
+                Incident(
+                    description = it.description,
+                    time = it.time,
+                    type = it.incidentType,
+                    confidence = it.confidence
+                )
+            }
+    )
+}
+
+private fun TripWithIncidents.effectiveStart(): Long =
+    effectiveTripStart(trip.startTime, incidents.map { it.deviceTimestamp })
+
+/**
+ * Hindi pwedeng mas maaga ang incident kaysa sa simula ng trip. Kung mas huli
+ * ang startTime kaysa sa pinakaunang incident, mali ang startTime (halimbawa,
+ * napalitan ng oras ng sync), kaya ang oras ng pinakaunang incident ang gagamitin.
+ */
+private fun effectiveTripStart(tripStart: Long, incidentTimestamps: List<Long>): Long {
+    val firstIncident = incidentTimestamps.filter { it > 0L }.minOrNull() ?: return tripStart
+    return if (tripStart <= 0L || firstIncident < tripStart) firstIncident else tripStart
+}
+
+private fun formatTripDate(millis: Long): String =
+    SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.US)
+        .apply { timeZone = TimeZone.getDefault() } // oras ng device (PH = UTC+8)
+        .format(Date(millis))
 
 private fun formatDurationText(startTime: Long, endTime: Long?): String {
     if (endTime == null || endTime <= startTime) return "Duration unavailable"
