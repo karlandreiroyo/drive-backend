@@ -9,6 +9,7 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import java.util.concurrent.TimeUnit
 
 interface AuthApiService {
@@ -20,6 +21,9 @@ interface AuthApiService {
 
     @GET("api/auth/me")
     suspend fun me(): Response<LoginResponse>
+
+    @PUT("api/auth/profile")
+    suspend fun updateProfile(@Body request: UpdateProfileRequest): Response<UpdateProfileResponse>
 
     companion object {
         private const val TAG = "AuthApiService"

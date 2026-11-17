@@ -21,8 +21,6 @@ object AuthSession {
     var user: AuthUserDto? = null
         private set
 
-    // 401s from protected endpoints are surfaced here so the navigation host
-    // can clear the dead session and send the driver back to login.
     private val _expiredEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val expiredEvents: SharedFlow<Unit> = _expiredEvents.asSharedFlow()
 
@@ -52,6 +50,13 @@ object AuthSession {
             .apply()
     }
 
+    fun updateUser(context: Context, updatedUser: AuthUserDto) {
+        this.user = updatedUser
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(KEY_USER, Gson().toJson(updatedUser))
+            .apply()
+    }
+
     fun clear(context: Context) {
         token = null
         user = null
@@ -62,10 +67,6 @@ object AuthSession {
         _expiredEvents.tryEmit(Unit)
     }
 
-    /**
-     * Reads the JWT `exp` claim so an obviously expired token is dropped on
-     * startup instead of waiting for a guaranteed 401.
-     */
     private fun isExpired(jwt: String): Boolean {
         val payload = jwt.split('.').getOrNull(1) ?: return true
         return runCatching {
