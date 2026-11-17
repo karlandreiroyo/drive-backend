@@ -1,6 +1,7 @@
 package com.example.d_r_i_v_e.frontend
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -8,6 +9,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Visibility
@@ -48,11 +52,38 @@ fun ChangePasswordScreen(
     var confirmPassword by remember { mutableStateOf("") }
     var showNewPassword by remember { mutableStateOf(false) }
     var showConfirmPassword by remember { mutableStateOf(false) }
-    var localError by remember { mutableStateOf<String?>(null) }
+    var serverError by remember { mutableStateOf<String?>(null) }
+
+    // Live Password Validation Rules (matches backend `isValidPassword` & `passwordError`)
+    val hasMinLength = newPassword.length >= 8
+    val hasUppercase = newPassword.any { it.isUpperCase() }
+    val hasLowercase = newPassword.any { it.isLowerCase() }
+    val hasNumber = newPassword.any { it.isDigit() }
+    val hasSpecial = newPassword.any { !it.isLetterOrDigit() }
+    val isPasswordStrong = hasMinLength && hasUppercase && hasLowercase && hasNumber && hasSpecial
+    val isSameAsCurrent = !currentSessionPassword.isNullOrBlank() && newPassword == currentSessionPassword
+    val passwordsMatch = confirmPassword.isNotEmpty() && newPassword == confirmPassword
+    val isFormValid = isPasswordStrong && !isSameAsCurrent && passwordsMatch
+
+    // Live Alert message computed while typing
+    val liveAlertMessage: String? = when {
+        serverError != null -> serverError
+        !isUnlocked -> null
+        newPassword.isEmpty() && confirmPassword.isEmpty() -> null
+        isSameAsCurrent -> "New password must be different from your current password."
+        !hasMinLength -> "Password must be at least 8 characters long."
+        !hasUppercase -> "Add at least 1 uppercase letter (A–Z)."
+        !hasLowercase -> "Add at least 1 lowercase letter (a–z)."
+        !hasNumber -> "Add at least 1 number (0–9)."
+        !hasSpecial -> "Add at least 1 special character (e.g. @, #, $, !)."
+        confirmPassword.isEmpty() -> "Please confirm your new password below."
+        !passwordsMatch -> "Confirmation password does not match."
+        else -> null
+    }
 
     LaunchedEffect(otpState) {
         if (otpState is OtpUiState.Error) {
-            localError = otpState.message
+            serverError = otpState.message
         }
     }
 
@@ -96,7 +127,60 @@ fun ChangePasswordScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(14.dp))
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Live Alert Banner (appears immediately when typing invalid password or mismatch)
+            if (liveAlertMessage != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFFCB1010).copy(alpha = 0.16f))
+                        .border(1.dp, Color(0xFFCB1010).copy(alpha = 0.65f), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.ErrorOutline,
+                        contentDescription = "Alert",
+                        tint = Color(0xFFFF5252),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = liveAlertMessage,
+                        color = Color(0xFFFFB4AB),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+                Spacer(modifier = Modifier.height(14.dp))
+            } else if (isUnlocked && isFormValid) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF22C55E).copy(alpha = 0.16f))
+                        .border(1.dp, Color(0xFF22C55E).copy(alpha = 0.65f), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.CheckCircle,
+                        contentDescription = "Ready",
+                        tint = Color(0xFF22C55E),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(
+                        text = "Strong password & confirmed! Ready to save.",
+                        color = Color(0xFF86EFAC),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+                Spacer(modifier = Modifier.height(14.dp))
+            }
 
             // Section Header + Lock Status
             Row(
@@ -177,12 +261,12 @@ fun ChangePasswordScreen(
                 }
             }
 
-            // Editable New Password Section (Shown once OTP is verified)
+            // Editable New Password + Confirmation Password + Live Rules (Shown once OTP is verified)
             if (isUnlocked) {
                 Spacer(modifier = Modifier.height(18.dp))
 
                 Text(
-                    text = "Set New Password (Optional)",
+                    text = "Set New Password",
                     color = Color.White.copy(alpha = 0.75f),
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -205,7 +289,7 @@ fun ChangePasswordScreen(
                         value = newPassword,
                         onValueChange = {
                             newPassword = it
-                            localError = null
+                            serverError = null
                         },
                         singleLine = true,
                         placeholder = {
@@ -227,15 +311,24 @@ fun ChangePasswordScreen(
                             unfocusedContainerColor = Color.Transparent,
                             focusedTextColor = Color.White,
                             unfocusedTextColor = Color.White,
-                            focusedIndicatorColor = Color(0xFF0F0B94),
+                            focusedIndicatorColor = if (newPassword.isEmpty() || isPasswordStrong) Color(0xFF0F0B94) else Color(0xFFCB1010),
                             unfocusedIndicatorColor = Color.Transparent
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
 
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Live Password Requirements Checklist
+                    PasswordRuleItem(label = "At least 8 characters", met = hasMinLength, active = newPassword.isNotEmpty())
+                    PasswordRuleItem(label = "At least 1 uppercase letter (A–Z)", met = hasUppercase, active = newPassword.isNotEmpty())
+                    PasswordRuleItem(label = "At least 1 lowercase letter (a–z)", met = hasLowercase, active = newPassword.isNotEmpty())
+                    PasswordRuleItem(label = "At least 1 number (0–9)", met = hasNumber, active = newPassword.isNotEmpty())
+                    PasswordRuleItem(label = "At least 1 special character (!@#$...)", met = hasSpecial, active = newPassword.isNotEmpty())
+
                     HorizontalDivider(
                         color = Color.White.copy(alpha = 0.08f),
-                        modifier = Modifier.padding(vertical = 8.dp)
+                        modifier = Modifier.padding(vertical = 10.dp)
                     )
 
                     Text(
@@ -247,7 +340,7 @@ fun ChangePasswordScreen(
                         value = confirmPassword,
                         onValueChange = {
                             confirmPassword = it
-                            localError = null
+                            serverError = null
                         },
                         singleLine = true,
                         placeholder = {
@@ -269,51 +362,54 @@ fun ChangePasswordScreen(
                             unfocusedContainerColor = Color.Transparent,
                             focusedTextColor = Color.White,
                             unfocusedTextColor = Color.White,
-                            focusedIndicatorColor = Color(0xFF0F0B94),
+                            focusedIndicatorColor = when {
+                                confirmPassword.isEmpty() -> Color(0xFF0F0B94)
+                                passwordsMatch -> Color(0xFF22C55E)
+                                else -> Color(0xFFCB1010)
+                            },
                             unfocusedIndicatorColor = Color.Transparent
                         ),
                         modifier = Modifier.fillMaxWidth()
                     )
-                }
-            }
 
-            if (localError != null) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = localError!!,
-                    color = Color(0xFFCB1010),
-                    fontSize = 13.sp
-                )
+                    if (confirmPassword.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        PasswordRuleItem(
+                            label = if (passwordsMatch) "Passwords match" else "Passwords do not match",
+                            met = passwordsMatch,
+                            active = true
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(22.dp))
 
             // Primary Action Button:
             // Locked -> "Change Password" (sends Gmail OTP & opens OTP screen)
-            // Unlocked -> "Save Password" (updates password in Supabase)
+            // Unlocked -> "Save Password" (enabled only when all live validations & confirmation pass)
             Button(
                 onClick = {
                     if (!isUnlocked) {
                         if (verifiedEmail.isBlank()) {
-                            localError = "No email associated with this account."
+                            serverError = "No email associated with this account."
                         } else {
-                            localError = null
+                            serverError = null
                             onRequestOtpClick(verifiedEmail)
                         }
-                    } else {
-                        if (newPassword.isBlank()) {
-                            localError = "Enter a new password to save changes."
-                        } else if (newPassword != confirmPassword) {
-                            localError = "Passwords do not match."
-                        } else {
-                            localError = null
-                            onSavePasswordClick(newPassword)
-                        }
+                    } else if (isFormValid) {
+                        serverError = null
+                        onSavePasswordClick(newPassword)
                     }
                 },
-                enabled = otpState !is OtpUiState.Loading,
+                enabled = if (!isUnlocked) {
+                    otpState !is OtpUiState.Loading
+                } else {
+                    isFormValid && otpState !is OtpUiState.Loading
+                },
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isUnlocked) Color(0xFF22C55E) else Color(0xFF0F0B94)
+                    containerColor = if (isUnlocked) Color(0xFF22C55E) else Color(0xFF0F0B94),
+                    disabledContainerColor = Color(0xFF313135)
                 ),
                 shape = RoundedCornerShape(24.dp),
                 modifier = Modifier
@@ -329,7 +425,7 @@ fun ChangePasswordScreen(
                 } else {
                     Text(
                         text = if (isUnlocked) "Save Password" else "Change Password",
-                        color = Color.White,
+                        color = if (!isUnlocked || isFormValid) Color.White else Color.White.copy(alpha = 0.45f),
                         fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -338,5 +434,35 @@ fun ChangePasswordScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
         }
+    }
+}
+
+@Composable
+private fun PasswordRuleItem(
+    label: String,
+    met: Boolean,
+    active: Boolean
+) {
+    val tint = when {
+        met -> Color(0xFF22C55E)
+        active -> Color(0xFFCB1010)
+        else -> Color.White.copy(alpha = 0.4f)
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(vertical = 2.dp)
+    ) {
+        Icon(
+            imageVector = if (met) Icons.Filled.CheckCircle else Icons.Filled.Cancel,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(14.dp)
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = label,
+            color = tint,
+            fontSize = 12.sp
+        )
     }
 }
