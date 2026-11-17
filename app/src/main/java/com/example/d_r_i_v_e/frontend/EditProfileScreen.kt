@@ -32,6 +32,7 @@ import com.example.d_r_i_v_e.backend.AuthSession
 import com.example.d_r_i_v_e.backend.OtpUiState
 import com.example.d_r_i_v_e.backend.OtpViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.time.Duration.Companion.seconds
 
@@ -43,34 +44,44 @@ fun EditProfileScreen(
     onTabCameraClick: () -> Unit,
     onTabMapClick: () -> Unit,
     onTabSettingsClick: () -> Unit,
-    onProfileSaved: (String, String, String) -> Unit = { _, _, _ -> }
+    onSaveToBackend: (
+        fullName: String,
+        email: String,
+        phoneNumber: String,
+        emergencyName: String,
+        emergencyPhone: String,
+        vehicleType: String,
+        plateNumber: String
+    ) -> Unit = { _, _, _, _, _, _, _ -> }
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val otpState by otpViewModel.state.collectAsState()
     val scrollState = rememberScrollState()
 
     val currentUser = AuthSession.user
-    val verifiedEmail = currentUser?.email?.trim().orEmpty().ifEmpty { "karlandreiroyo86@gmail.com" }
+    val verifiedEmail = currentUser?.email?.trim().orEmpty()
 
-    // Profile Form States
-    var fullName by remember { mutableStateOf(currentUser?.fullName ?: "andrei") }
-    var email by remember { mutableStateOf(verifiedEmail) }
-    var phoneNumber by remember { mutableStateOf(currentUser?.phoneNumber ?: "09999999999") }
+    var fullName by remember(currentUser) { mutableStateOf(currentUser?.fullName.orEmpty()) }
+    var email by remember(currentUser) { mutableStateOf(currentUser?.email.orEmpty()) }
+    var phoneNumber by remember(currentUser) { mutableStateOf(currentUser?.phoneNumber.orEmpty()) }
+    var emergencyName by remember(currentUser) { mutableStateOf(currentUser?.emergencyName.orEmpty()) }
+    var emergencyPhone by remember(currentUser) { mutableStateOf(currentUser?.emergencyPhone.orEmpty()) }
+    var vehicleType by remember(currentUser) { mutableStateOf(currentUser?.vehicleType.orEmpty()) }
+    var plateNumber by remember(currentUser) { mutableStateOf(currentUser?.plateNumber.orEmpty()) }
 
-    // Lock State: Naka-disable muna hangga't hindi na-verify ang Gmail OTP
     var isEditingUnlocked by remember { mutableStateOf(false) }
+    var isSaving by remember { mutableStateOf(false) }
 
-    // OTP Modal & 10-Minute Timer States
     var showOtpModal by remember { mutableStateOf(false) }
     var otpInput by remember { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
-    var remainingSeconds by remember { mutableIntStateOf(600) } // 10 minutes = 600s
+    var remainingSeconds by remember { mutableIntStateOf(600) }
 
     DisposableEffect(Unit) {
         onDispose { otpViewModel.reset() }
     }
 
-    // Handle OtpViewModel backend state updates
     LaunchedEffect(otpState) {
         when (val state = otpState) {
             is OtpUiState.Resent -> {
@@ -80,11 +91,10 @@ fun EditProfileScreen(
                 showOtpModal = true
             }
             is OtpUiState.Verified -> {
-                // AUTO-ACCEPT: Tama ang OTP -> I-unlock na ang fields para pwede nang palitan!
                 showOtpModal = false
                 isEditingUnlocked = true
                 otpViewModel.reset()
-                Toast.makeText(context, "Verified! You can now edit your info.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Verified! You can now edit your profile.", Toast.LENGTH_SHORT).show()
             }
             is OtpUiState.Error -> {
                 localError = state.message
@@ -93,7 +103,6 @@ fun EditProfileScreen(
         }
     }
 
-    // 10-Minute Countdown Timer
     LaunchedEffect(showOtpModal, remainingSeconds) {
         if (showOtpModal && remainingSeconds > 0) {
             delay(1.seconds)
@@ -126,7 +135,6 @@ fun EditProfileScreen(
                 .verticalScroll(scrollState)
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
-            // Top Bar
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(vertical = 4.dp)
@@ -149,7 +157,6 @@ fun EditProfileScreen(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Compact Avatar Card
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -179,16 +186,13 @@ fun EditProfileScreen(
                         color = if (isEditingUnlocked) Color(0xFF3B82F6) else Color.White.copy(alpha = 0.5f),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
-                        modifier = Modifier.clickable(enabled = isEditingUnlocked) {
-                            /* Photo picker logic */
-                        }
+                        modifier = Modifier.clickable(enabled = isEditingUnlocked) { }
                     )
                 }
             }
 
             Spacer(modifier = Modifier.height(18.dp))
 
-            // Section Title with Lock Indicator
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -216,7 +220,6 @@ fun EditProfileScreen(
                 )
             }
 
-            // Form Container (Disabled muna hangga't di pa verified ang OTP)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -230,25 +233,83 @@ fun EditProfileScreen(
                     enabled = isEditingUnlocked,
                     onValueChange = { fullName = it }
                 )
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.08f),
-                    modifier = Modifier.padding(vertical = 6.dp)
-                )
+                HorizontalDivider(color = Color.White.copy(alpha = 0.08f), modifier = Modifier.padding(vertical = 6.dp))
                 ProfileInputField(
                     label = "Email",
                     value = email,
                     enabled = isEditingUnlocked,
                     onValueChange = { email = it }
                 )
-                HorizontalDivider(
-                    color = Color.White.copy(alpha = 0.08f),
-                    modifier = Modifier.padding(vertical = 6.dp)
-                )
+                HorizontalDivider(color = Color.White.copy(alpha = 0.08f), modifier = Modifier.padding(vertical = 6.dp))
                 ProfileInputField(
                     label = "Phone Number",
                     value = phoneNumber,
                     enabled = isEditingUnlocked,
                     onValueChange = { phoneNumber = it }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            Text(
+                text = "Emergency Contact",
+                color = Color.White.copy(alpha = 0.75f),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFF1C1C1E))
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                ProfileInputField(
+                    label = "Emergency Contact Name",
+                    value = emergencyName,
+                    enabled = isEditingUnlocked,
+                    onValueChange = { emergencyName = it }
+                )
+                HorizontalDivider(color = Color.White.copy(alpha = 0.08f), modifier = Modifier.padding(vertical = 6.dp))
+                ProfileInputField(
+                    label = "Emergency Phone",
+                    value = emergencyPhone,
+                    enabled = isEditingUnlocked,
+                    onValueChange = { emergencyPhone = it }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            Text(
+                text = "Vehicle Information",
+                color = Color.White.copy(alpha = 0.75f),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xFF1C1C1E))
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+            ) {
+                ProfileInputField(
+                    label = "Vehicle Type",
+                    value = vehicleType,
+                    enabled = isEditingUnlocked,
+                    onValueChange = { vehicleType = it }
+                )
+                HorizontalDivider(color = Color.White.copy(alpha = 0.08f), modifier = Modifier.padding(vertical = 6.dp))
+                ProfileInputField(
+                    label = "Plate Number",
+                    value = plateNumber,
+                    enabled = isEditingUnlocked,
+                    onValueChange = { plateNumber = it }
                 )
             }
 
@@ -261,24 +322,35 @@ fun EditProfileScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(22.dp))
 
-            // Primary Action Button:
-            // Step 1: "Change Info" -> Magse-send ng Gmail OTP
-            // Step 2: "Save Changes" -> Kapag verified na ang OTP at unlocked na ang fields
             Button(
                 onClick = {
                     if (!isEditingUnlocked) {
-                        localError = null
-                        otpViewModel.resend(identifier = verifiedEmail, purpose = "profile_update")
+                        if (verifiedEmail.isBlank()) {
+                            localError = "No email associated with this account."
+                        } else {
+                            localError = null
+                            otpViewModel.resend(identifier = verifiedEmail, purpose = "profile_update")
+                        }
                     } else {
-                        onProfileSaved(fullName.trim(), email.trim(), phoneNumber.trim())
-                        isEditingUnlocked = false
-                        Toast.makeText(context, "Profile changes saved!", Toast.LENGTH_SHORT).show()
-                        onBackClick()
+                        scope.launch {
+                            isSaving = true
+                            onSaveToBackend(
+                                fullName.trim(),
+                                email.trim(),
+                                phoneNumber.trim(),
+                                emergencyName.trim(),
+                                emergencyPhone.trim(),
+                                vehicleType.trim(),
+                                plateNumber.trim()
+                            )
+                            isSaving = false
+                            isEditingUnlocked = false
+                        }
                     }
                 },
-                enabled = otpState !is OtpUiState.Loading,
+                enabled = otpState !is OtpUiState.Loading && !isSaving,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = if (isEditingUnlocked) Color(0xFF22C55E) else Color(0xFF0F0B94)
                 ),
@@ -287,7 +359,7 @@ fun EditProfileScreen(
                     .fillMaxWidth()
                     .height(50.dp)
             ) {
-                if (otpState is OtpUiState.Loading && !showOtpModal) {
+                if ((otpState is OtpUiState.Loading && !showOtpModal) || isSaving) {
                     CircularProgressIndicator(
                         color = Color.White,
                         modifier = Modifier.size(22.dp),
@@ -307,7 +379,6 @@ fun EditProfileScreen(
         }
     }
 
-    // OTP Modal (Auto-Accepts on 6th digit)
     if (showOtpModal) {
         Dialog(onDismissRequest = {
             showOtpModal = false
@@ -337,7 +408,6 @@ fun EditProfileScreen(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // 10-Minute Countdown Display
                 Text(
                     text = if (remainingSeconds > 0) "Expires in $formattedTime" else "OTP Expired",
                     color = if (remainingSeconds > 60) Color(0xFF22C55E) else Color(0xFFCB1010),
@@ -354,7 +424,6 @@ fun EditProfileScreen(
                         otpInput = digitsOnly
                         localError = null
 
-                        // AUTO-ACCEPT: Sa pag-type ng ika-6 na digit, automatic magve-verify at mag-u-unlock
                         if (digitsOnly.length == 6 && otpState !is OtpUiState.Loading) {
                             if (remainingSeconds <= 0) {
                                 localError = "OTP expired. Please resend a new code."
