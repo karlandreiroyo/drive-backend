@@ -20,10 +20,13 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.d_r_i_v_e.backend.AuthSession
 
 @Composable
 fun AccountProfileScreen(
-    driverName: String,
+    driverName: String = AuthSession.user?.fullName?.takeIf { it.isNotBlank() } ?: "Driver",
+    vehicleType: String = AuthSession.user?.vehicleType?.takeIf { it.isNotBlank() } ?: "",
+    plateNumber: String = AuthSession.user?.plateNumber?.takeIf { it.isNotBlank() } ?: "",
     onBackClick: () -> Unit,
     onProfileRowClick: () -> Unit,
     onNotificationsClick: () -> Unit,
@@ -32,6 +35,11 @@ fun AccountProfileScreen(
     onTabMapClick: () -> Unit,
     onTabSettingsClick: () -> Unit
 ) {
+    val vehicleSummary = listOf(vehicleType.trim(), plateNumber.trim())
+        .filter { it.isNotEmpty() && !it.equals("N/A", ignoreCase = true) }
+        .joinToString(" • ")
+        .ifEmpty { "No vehicle details set" }
+
     Scaffold(
         containerColor = Color.Black,
         bottomBar = {
@@ -72,7 +80,7 @@ fun AccountProfileScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Profile Header Card
+            // Profile Header Card (Name + Vehicle Type & Plate Number)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -104,10 +112,12 @@ fun AccountProfileScreen(
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold
                     )
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "Edit personal details",
-                        color = Color.White.copy(alpha = 0.6f),
-                        fontSize = 13.sp
+                        text = vehicleSummary,
+                        color = Color.White.copy(alpha = 0.65f),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium
                     )
                 }
                 Icon(

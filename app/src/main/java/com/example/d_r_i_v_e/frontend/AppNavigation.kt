@@ -328,6 +328,8 @@ fun AppNavigation() {
 
         "accountProfile" -> AccountProfileScreen(
             driverName = AuthSession.user?.fullName ?: "Driver",
+            vehicleType = AuthSession.user?.vehicleType.orEmpty(),
+            plateNumber = AuthSession.user?.plateNumber.orEmpty(),
             onBackClick = { goBack() },
             onProfileRowClick = { navigateTo("editProfile") },
             onNotificationsClick = { navigateTo("notifications") },
