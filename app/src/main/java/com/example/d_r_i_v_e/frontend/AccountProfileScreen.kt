@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.*
@@ -29,6 +30,7 @@ fun AccountProfileScreen(
     plateNumber: String = AuthSession.user?.plateNumber?.takeIf { it.isNotBlank() } ?: "",
     onBackClick: () -> Unit,
     onProfileRowClick: () -> Unit,
+    onChangePasswordClick: () -> Unit = {},
     onNotificationsClick: () -> Unit,
     onTabDashboardClick: () -> Unit,
     onTabCameraClick: () -> Unit,
@@ -123,7 +125,7 @@ fun AccountProfileScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Menu Options (Edit Profile button lang ang clickable papuntang EditProfileScreen)
+            // Menu Options
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -135,6 +137,12 @@ fun AccountProfileScreen(
                     label = "Edit Profile",
                     showDivider = true,
                     onClick = onProfileRowClick
+                )
+                AccountMenuRow(
+                    icon = Icons.Filled.Lock,
+                    label = "Change Password",
+                    showDivider = true,
+                    onClick = onChangePasswordClick
                 )
                 AccountMenuRow(
                     icon = Icons.Filled.Notifications,

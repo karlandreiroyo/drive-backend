@@ -34,6 +34,7 @@ fun AppNavigation() {
     var otpPurpose by remember { mutableStateOf("signup") }
     var awaitingResetCode by remember { mutableStateOf(false) }
     var awaitingProfileOtp by remember { mutableStateOf(false) }
+    var isChangePasswordFromProfile by remember { mutableStateOf(false) }
     var isProfileEditUnlocked by remember { mutableStateOf(false) }
     var welcomeName by remember { mutableStateOf<String?>(null) }
 
@@ -66,13 +67,21 @@ fun AppNavigation() {
         if (screenHistory.size > 1) goBack() else resetTo("dashboard")
     }
 
-    // Navigate to OTP screen once Gmail OTP request succeeds (Forgot Password OR Edit Profile)
     LaunchedEffect(otpState, awaitingResetCode, awaitingProfileOtp) {
         if ((awaitingResetCode || awaitingProfileOtp) && otpState is OtpUiState.Resent) {
             awaitingResetCode = false
             awaitingProfileOtp = false
             otpViewModel.reset()
             navigateTo("otp")
+        } else if ((awaitingResetCode || awaitingProfileOtp) && otpState is OtpUiState.Error) {
+            val errMsg = (otpState as OtpUiState.Error).message
+            awaitingResetCode = false
+            awaitingProfileOtp = false
+            if (isChangePasswordFromProfile) {
+                isChangePasswordFromProfile = false
+                Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
+                otpViewModel.reset()
+            }
         }
     }
 
@@ -119,6 +128,7 @@ fun AppNavigation() {
         knownAccounts = emptyList()
         showAccountChooser = false
         isProfileEditUnlocked = false
+        isChangePasswordFromProfile = false
     }
 
     LaunchedEffect(Unit) {
@@ -220,6 +230,7 @@ fun AppNavigation() {
                     otpPurpose = "reset"
                     otpResetToken = null
                     otpCode = ""
+                    isChangePasswordFromProfile = false
                     awaitingResetCode = true
                     otpViewModel.forgotPassword(otpIdentifier)
                 },
@@ -267,7 +278,11 @@ fun AppNavigation() {
                     otpViewModel.verify(otpIdentifier, code, otpPurpose)
                 },
                 onResendClick = {
-                    otpViewModel.resend(otpIdentifier, otpPurpose)
+                    if (otpPurpose == "reset") {
+                        otpViewModel.forgotPassword(otpIdentifier)
+                    } else {
+                        otpViewModel.resend(otpIdentifier, otpPurpose)
+                    }
                 }
             )
         }
@@ -280,7 +295,13 @@ fun AppNavigation() {
                     otpViewModel.reset()
                     otpCode = ""
                     otpResetToken = null
-                    navigateTo("login")
+                    if (isChangePasswordFromProfile) {
+                        isChangePasswordFromProfile = false
+                        // Pop createPassword and otp to return directly to Account & Profile
+                        screenHistory = screenHistory.filterNot { it == "createPassword" || it == "otp" }
+                    } else {
+                        navigateTo("login")
+                    }
                 }
             }
             CreateNewPasswordScreen(
@@ -351,6 +372,20 @@ fun AppNavigation() {
                 isProfileEditUnlocked = false
                 otpViewModel.reset()
                 navigateTo("editProfile")
+            },
+            onChangePasswordClick = {
+                val email = AuthSession.user?.email?.trim()?.lowercase().orEmpty()
+                if (email.isBlank()) {
+                    Toast.makeText(context, "No email associated with this account.", Toast.LENGTH_SHORT).show()
+                } else {
+                    otpIdentifier = email
+                    otpPurpose = "reset"
+                    otpResetToken = null
+                    otpCode = ""
+                    isChangePasswordFromProfile = true
+                    awaitingResetCode = true
+                    otpViewModel.forgotPassword(email)
+                }
             },
             onNotificationsClick = { navigateTo("notifications") },
             onTabDashboardClick = { navigateTo("dashboard") },
