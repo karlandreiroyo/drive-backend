@@ -4,11 +4,15 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -43,23 +47,30 @@ fun EditProfileScreen(
 ) {
     val context = LocalContext.current
     val otpState by otpViewModel.state.collectAsState()
+    val scrollState = rememberScrollState()
 
     val currentUser = AuthSession.user
     val verifiedEmail = currentUser?.email?.trim().orEmpty().ifEmpty { "karlandreiroyo86@gmail.com" }
 
+    // Profile Form States
     var fullName by remember { mutableStateOf(currentUser?.fullName ?: "andrei") }
     var email by remember { mutableStateOf(verifiedEmail) }
     var phoneNumber by remember { mutableStateOf(currentUser?.phoneNumber ?: "09999999999") }
 
+    // Lock State: Naka-disable muna hangga't hindi na-verify ang Gmail OTP
+    var isEditingUnlocked by remember { mutableStateOf(false) }
+
+    // OTP Modal & 10-Minute Timer States
     var showOtpModal by remember { mutableStateOf(false) }
     var otpInput by remember { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
-    var remainingSeconds by remember { mutableIntStateOf(600) }
+    var remainingSeconds by remember { mutableIntStateOf(600) } // 10 minutes = 600s
 
     DisposableEffect(Unit) {
         onDispose { otpViewModel.reset() }
     }
 
+    // Handle OtpViewModel backend state updates
     LaunchedEffect(otpState) {
         when (val state = otpState) {
             is OtpUiState.Resent -> {
@@ -69,11 +80,11 @@ fun EditProfileScreen(
                 showOtpModal = true
             }
             is OtpUiState.Verified -> {
+                // AUTO-ACCEPT: Tama ang OTP -> I-unlock na ang fields para pwede nang palitan!
                 showOtpModal = false
+                isEditingUnlocked = true
                 otpViewModel.reset()
-                onProfileSaved(fullName.trim(), email.trim(), phoneNumber.trim())
-                Toast.makeText(context, "Profile updated successfully!", Toast.LENGTH_SHORT).show()
-                onBackClick()
+                Toast.makeText(context, "Verified! You can now edit your info.", Toast.LENGTH_SHORT).show()
             }
             is OtpUiState.Error -> {
                 localError = state.message
@@ -82,6 +93,7 @@ fun EditProfileScreen(
         }
     }
 
+    // 10-Minute Countdown Timer
     LaunchedEffect(showOtpModal, remainingSeconds) {
         if (showOtpModal && remainingSeconds > 0) {
             delay(1.seconds)
@@ -111,11 +123,13 @@ fun EditProfileScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(16.dp)
+                .verticalScroll(scrollState)
+                .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
+            // Top Bar
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(vertical = 8.dp)
+                modifier = Modifier.padding(vertical = 4.dp)
             ) {
                 IconButton(onClick = onBackClick) {
                     Icon(
@@ -124,7 +138,7 @@ fun EditProfileScreen(
                         tint = Color.White
                     )
                 }
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = "Edit Profile",
                     color = Color.White,
@@ -133,20 +147,21 @@ fun EditProfileScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
+            // Compact Avatar Card
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
                     .background(Color(0xFF1C1C1E))
-                    .padding(vertical = 24.dp),
+                    .padding(vertical = 18.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Box(
                         modifier = Modifier
-                            .size(80.dp)
+                            .size(72.dp)
                             .clip(CircleShape)
                             .background(Color(0xFF6E6E73)),
                         contentAlignment = Alignment.Center
@@ -155,57 +170,84 @@ fun EditProfileScreen(
                             imageVector = Icons.Filled.Person,
                             contentDescription = "Profile Photo",
                             tint = Color(0xFFD1D1D6),
-                            modifier = Modifier.size(48.dp)
+                            modifier = Modifier.size(42.dp)
                         )
                     }
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = "Change Photo",
-                        color = Color.White.copy(alpha = 0.7f),
-                        fontSize = 14.sp,
-                        modifier = Modifier.clickable { }
+                        color = if (isEditingUnlocked) Color(0xFF3B82F6) else Color.White.copy(alpha = 0.5f),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.clickable(enabled = isEditingUnlocked) {
+                            /* Photo picker logic */
+                        }
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(18.dp))
 
-            Text(
-                text = "Basic Information",
-                color = Color.White.copy(alpha = 0.7f),
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
+            // Section Title with Lock Indicator
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp)
+            ) {
+                Text(
+                    text = "Basic Information",
+                    color = Color.White.copy(alpha = 0.75f),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = if (isEditingUnlocked) Icons.Filled.LockOpen else Icons.Filled.Lock,
+                    contentDescription = null,
+                    tint = if (isEditingUnlocked) Color(0xFF22C55E) else Color.White.copy(alpha = 0.45f),
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = if (isEditingUnlocked) "Unlocked" else "Locked",
+                    color = if (isEditingUnlocked) Color(0xFF22C55E) else Color.White.copy(alpha = 0.45f),
+                    fontSize = 12.sp
+                )
+            }
 
+            // Form Container (Disabled muna hangga't di pa verified ang OTP)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
                     .background(Color(0xFF1C1C1E))
-                    .padding(16.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
                 ProfileInputField(
                     label = "Full Name",
                     value = fullName,
+                    enabled = isEditingUnlocked,
                     onValueChange = { fullName = it }
                 )
                 HorizontalDivider(
                     color = Color.White.copy(alpha = 0.08f),
-                    modifier = Modifier.padding(vertical = 8.dp)
+                    modifier = Modifier.padding(vertical = 6.dp)
                 )
                 ProfileInputField(
                     label = "Email",
                     value = email,
+                    enabled = isEditingUnlocked,
                     onValueChange = { email = it }
                 )
                 HorizontalDivider(
                     color = Color.White.copy(alpha = 0.08f),
-                    modifier = Modifier.padding(vertical = 8.dp)
+                    modifier = Modifier.padding(vertical = 6.dp)
                 )
                 ProfileInputField(
                     label = "Phone Number",
                     value = phoneNumber,
+                    enabled = isEditingUnlocked,
                     onValueChange = { phoneNumber = it }
                 )
             }
@@ -219,15 +261,27 @@ fun EditProfileScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
+            // Primary Action Button:
+            // Step 1: "Change Info" -> Magse-send ng Gmail OTP
+            // Step 2: "Save Changes" -> Kapag verified na ang OTP at unlocked na ang fields
             Button(
                 onClick = {
-                    localError = null
-                    otpViewModel.resend(identifier = verifiedEmail, purpose = "profile_update")
+                    if (!isEditingUnlocked) {
+                        localError = null
+                        otpViewModel.resend(identifier = verifiedEmail, purpose = "profile_update")
+                    } else {
+                        onProfileSaved(fullName.trim(), email.trim(), phoneNumber.trim())
+                        isEditingUnlocked = false
+                        Toast.makeText(context, "Profile changes saved!", Toast.LENGTH_SHORT).show()
+                        onBackClick()
+                    }
                 },
                 enabled = otpState !is OtpUiState.Loading,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0F0B94)),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isEditingUnlocked) Color(0xFF22C55E) else Color(0xFF0F0B94)
+                ),
                 shape = RoundedCornerShape(24.dp),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -241,16 +295,19 @@ fun EditProfileScreen(
                     )
                 } else {
                     Text(
-                        text = "Save Changes",
+                        text = if (isEditingUnlocked) "Save Changes" else "Change Info",
                         color = Color.White,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
             }
+
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 
+    // OTP Modal (Auto-Accepts on 6th digit)
     if (showOtpModal) {
         Dialog(onDismissRequest = {
             showOtpModal = false
@@ -265,7 +322,7 @@ fun EditProfileScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "Verify Profile Update",
+                    text = "Verify Identity",
                     color = Color.White,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
@@ -280,6 +337,7 @@ fun EditProfileScreen(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
+                // 10-Minute Countdown Display
                 Text(
                     text = if (remainingSeconds > 0) "Expires in $formattedTime" else "OTP Expired",
                     color = if (remainingSeconds > 60) Color(0xFF22C55E) else Color(0xFFCB1010),
@@ -296,6 +354,7 @@ fun EditProfileScreen(
                         otpInput = digitsOnly
                         localError = null
 
+                        // AUTO-ACCEPT: Sa pag-type ng ika-6 na digit, automatic magve-verify at mag-u-unlock
                         if (digitsOnly.length == 6 && otpState !is OtpUiState.Loading) {
                             if (remainingSeconds <= 0) {
                                 localError = "OTP expired. Please resend a new code."
@@ -388,6 +447,7 @@ fun EditProfileScreen(
 private fun ProfileInputField(
     label: String,
     value: String,
+    enabled: Boolean,
     onValueChange: (String) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -399,14 +459,18 @@ private fun ProfileInputField(
         TextField(
             value = value,
             onValueChange = onValueChange,
+            enabled = enabled,
             singleLine = true,
             colors = TextFieldDefaults.colors(
                 focusedContainerColor = Color.Transparent,
                 unfocusedContainerColor = Color.Transparent,
+                disabledContainerColor = Color.Transparent,
                 focusedTextColor = Color.White,
                 unfocusedTextColor = Color.White,
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent
+                disabledTextColor = Color.White.copy(alpha = 0.55f),
+                focusedIndicatorColor = Color(0xFF0F0B94),
+                unfocusedIndicatorColor = Color.Transparent,
+                disabledIndicatorColor = Color.Transparent
             ),
             modifier = Modifier.fillMaxWidth()
         )
