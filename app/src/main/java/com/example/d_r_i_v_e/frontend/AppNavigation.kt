@@ -35,6 +35,7 @@ fun AppNavigation() {
     var awaitingResetCode by remember { mutableStateOf(false) }
     var awaitingProfileOtp by remember { mutableStateOf(false) }
     var isChangePasswordFromProfile by remember { mutableStateOf(false) }
+    var isPasswordEditUnlocked by remember { mutableStateOf(false) }
     var isProfileEditUnlocked by remember { mutableStateOf(false) }
     var welcomeName by remember { mutableStateOf<String?>(null) }
 
@@ -73,15 +74,6 @@ fun AppNavigation() {
             awaitingProfileOtp = false
             otpViewModel.reset()
             navigateTo("otp")
-        } else if ((awaitingResetCode || awaitingProfileOtp) && otpState is OtpUiState.Error) {
-            val errMsg = (otpState as OtpUiState.Error).message
-            awaitingResetCode = false
-            awaitingProfileOtp = false
-            if (isChangePasswordFromProfile) {
-                isChangePasswordFromProfile = false
-                Toast.makeText(context, errMsg, Toast.LENGTH_LONG).show()
-                otpViewModel.reset()
-            }
         }
     }
 
@@ -128,6 +120,7 @@ fun AppNavigation() {
         knownAccounts = emptyList()
         showAccountChooser = false
         isProfileEditUnlocked = false
+        isPasswordEditUnlocked = false
         isChangePasswordFromProfile = false
     }
 
@@ -260,7 +253,13 @@ fun AppNavigation() {
                             goBack()
                         }
                         else -> {
-                            navigateTo("createPassword")
+                            if (isChangePasswordFromProfile) {
+                                isPasswordEditUnlocked = true
+                                Toast.makeText(context, "OTP Verified! Password unlocked.", Toast.LENGTH_SHORT).show()
+                                goBack()
+                            } else {
+                                navigateTo("createPassword")
+                            }
                         }
                     }
                 }
@@ -295,13 +294,7 @@ fun AppNavigation() {
                     otpViewModel.reset()
                     otpCode = ""
                     otpResetToken = null
-                    if (isChangePasswordFromProfile) {
-                        isChangePasswordFromProfile = false
-                        // Pop createPassword and otp to return directly to Account & Profile
-                        screenHistory = screenHistory.filterNot { it == "createPassword" || it == "otp" }
-                    } else {
-                        navigateTo("login")
-                    }
+                    navigateTo("login")
                 }
             }
             CreateNewPasswordScreen(
@@ -374,18 +367,10 @@ fun AppNavigation() {
                 navigateTo("editProfile")
             },
             onChangePasswordClick = {
-                val email = AuthSession.user?.email?.trim()?.lowercase().orEmpty()
-                if (email.isBlank()) {
-                    Toast.makeText(context, "No email associated with this account.", Toast.LENGTH_SHORT).show()
-                } else {
-                    otpIdentifier = email
-                    otpPurpose = "reset"
-                    otpResetToken = null
-                    otpCode = ""
-                    isChangePasswordFromProfile = true
-                    awaitingResetCode = true
-                    otpViewModel.forgotPassword(email)
-                }
+                isPasswordEditUnlocked = false
+                isChangePasswordFromProfile = true
+                otpViewModel.reset()
+                navigateTo("changePassword")
             },
             onNotificationsClick = { navigateTo("notifications") },
             onTabDashboardClick = { navigateTo("dashboard") },
@@ -393,6 +378,52 @@ fun AppNavigation() {
             onTabMapClick = { navigateTo("tripHistory") },
             onTabSettingsClick = { navigateTo("settings") }
         )
+
+        "changePassword" -> {
+            val resetState = otpState
+            LaunchedEffect(resetState) {
+                if (resetState is OtpUiState.PasswordReset) {
+                    Toast.makeText(context, resetState.message, Toast.LENGTH_LONG).show()
+                    otpViewModel.reset()
+                    otpCode = ""
+                    otpResetToken = null
+                    isPasswordEditUnlocked = false
+                    isChangePasswordFromProfile = false
+                    goBack()
+                }
+            }
+            ChangePasswordScreen(
+                otpState = otpState,
+                isUnlocked = isPasswordEditUnlocked,
+                onRequestOtpClick = { userEmail ->
+                    otpIdentifier = userEmail.trim().lowercase()
+                    otpPurpose = "reset"
+                    otpResetToken = null
+                    otpCode = ""
+                    isChangePasswordFromProfile = true
+                    awaitingResetCode = true
+                    otpViewModel.forgotPassword(otpIdentifier)
+                },
+                onSavePasswordClick = { newPassword ->
+                    otpViewModel.resetPassword(
+                        identifier = otpIdentifier,
+                        code = otpCode,
+                        newPassword = newPassword,
+                        resetToken = otpResetToken
+                    )
+                },
+                onBackClick = {
+                    isPasswordEditUnlocked = false
+                    isChangePasswordFromProfile = false
+                    otpViewModel.reset()
+                    goBack()
+                },
+                onTabDashboardClick = { navigateTo("dashboard") },
+                onTabCameraClick = { navigateTo("liveFeed") },
+                onTabMapClick = { navigateTo("tripHistory") },
+                onTabSettingsClick = { navigateTo("settings") }
+            )
+        }
 
         "notifications" -> NotificationsScreen(
             onBackClick = { goBack() },
