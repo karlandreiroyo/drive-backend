@@ -8,14 +8,18 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -58,6 +62,27 @@ fun TripHistoryScreen(
     val startedAt = sessionStartedAt
     val sessionIncidentCount = liveIncidentCount
     var pendingDeleteTripId by remember { mutableStateOf<String?>(null) }
+
+    // Pagination states (10 items per page)
+    var currentPage by remember { mutableIntStateOf(1) }
+    val itemsPerPage = 10
+
+    // I-reset sa page 1 sakaling magbago ang listahan ng trips
+    LaunchedEffect(state.trips.size) {
+        currentPage = 1
+    }
+
+    val totalTrips = state.trips.size
+    val totalPages = if (totalTrips > 0) (totalTrips + itemsPerPage - 1) / itemsPerPage else 1
+    val paginatedTrips = remember(state.trips, currentPage) {
+        val startIndex = (currentPage - 1) * itemsPerPage
+        val endIndex = minOf(startIndex + itemsPerPage, totalTrips)
+        if (startIndex < totalTrips) {
+            state.trips.subList(startIndex, endIndex)
+        } else {
+            emptyList()
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -107,11 +132,58 @@ fun TripHistoryScreen(
                     }
                 }
 
-                items(state.trips, key = { it.id }) { trip ->
+                // Ipakita lang ang mga trips para sa kasalukuyang page (max 10)
+                items(paginatedTrips, key = { it.id }) { trip ->
                     TripCard(
                         trip = trip,
                         onDeleteClick = { pendingDeleteTripId = trip.id }
                     )
+                }
+
+                // Pagination Controls kung higit sa 10 ang trips
+                if (totalPages > 1) {
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedButton(
+                                onClick = { if (currentPage > 1) currentPage-- },
+                                enabled = currentPage > 1,
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = Color.White,
+                                    disabledContentColor = Color.White.copy(alpha = 0.3f)
+                                )
+                            ) {
+                                Icon(Icons.Filled.ChevronLeft, contentDescription = "Previous")
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Prev")
+                            }
+
+                            Text(
+                                text = "Page $currentPage of $totalPages",
+                                color = Color.White.copy(alpha = 0.7f),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+
+                            OutlinedButton(
+                                onClick = { if (currentPage < totalPages) currentPage++ },
+                                enabled = currentPage < totalPages,
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = Color.White,
+                                    disabledContentColor = Color.White.copy(alpha = 0.3f)
+                                )
+                            ) {
+                                Text("Next")
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(Icons.Filled.ChevronRight, contentDescription = "Next")
+                            }
+                        }
+                    }
                 }
 
                 if (!state.isLoading && state.trips.isEmpty()) {
@@ -445,19 +517,15 @@ private data class IncidentDisplay(
 private val percentPattern = Regex("""(\d{1,3})\s*%""")
 
 private fun Incident.toDisplay(): IncidentDisplay {
-    // Kunin ang tunay na confidence kung available, o i-parse sa description
     val rawPercent = confidence?.let {
         if (it <= 1f) (it * 100).toInt() else it.toInt()
     } ?: parseConfidence(description)
 
-    // Kung walang naka-save na porsyento (0 o null galing sa lumang data),
-    // maglagay ng makatotohanang default para hindi maging 0%.
-    // Kung mayroon namang tunay na porsyento, gamitin iyon.
     val percent = if (rawPercent != null && rawPercent > 0) {
         rawPercent.coerceIn(1, 100)
     } else {
         when {
-            type.lowercase().contains("nod") || type.lowercase().contains("drowsy") -> 85
+            type.lowercase(Locale.US).contains("nod") || type.lowercase(Locale.US).contains("drowsy") -> 85
             else -> 70
         }
     }
