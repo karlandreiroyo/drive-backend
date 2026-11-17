@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -22,23 +21,20 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.d_r_i_v_e.backend.AuthSession
 import com.example.d_r_i_v_e.backend.OtpUiState
 import com.example.d_r_i_v_e.backend.OtpViewModel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.util.Locale
-import kotlin.time.Duration.Companion.seconds
 
 @Composable
 fun EditProfileScreen(
     otpViewModel: OtpViewModel = viewModel(),
+    isEditingUnlocked: Boolean = false,
+    onRequestEditOtp: (String) -> Unit = {},
+    onLockReset: () -> Unit = {},
     onBackClick: () -> Unit,
     onTabDashboardClick: () -> Unit,
     onTabCameraClick: () -> Unit,
@@ -70,50 +66,13 @@ fun EditProfileScreen(
     var vehicleType by remember(currentUser) { mutableStateOf(currentUser?.vehicleType.orEmpty()) }
     var plateNumber by remember(currentUser) { mutableStateOf(currentUser?.plateNumber.orEmpty()) }
 
-    var isEditingUnlocked by remember { mutableStateOf(false) }
     var isSaving by remember { mutableStateOf(false) }
-
-    var showOtpModal by remember { mutableStateOf(false) }
-    var otpInput by remember { mutableStateOf("") }
     var localError by remember { mutableStateOf<String?>(null) }
-    var remainingSeconds by remember { mutableIntStateOf(600) }
-
-    DisposableEffect(Unit) {
-        onDispose { otpViewModel.reset() }
-    }
 
     LaunchedEffect(otpState) {
-        when (val state = otpState) {
-            is OtpUiState.Resent -> {
-                remainingSeconds = 600
-                otpInput = ""
-                localError = null
-                showOtpModal = true
-            }
-            is OtpUiState.Verified -> {
-                showOtpModal = false
-                isEditingUnlocked = true
-                otpViewModel.reset()
-                Toast.makeText(context, "Verified! You can now edit your profile.", Toast.LENGTH_SHORT).show()
-            }
-            is OtpUiState.Error -> {
-                localError = state.message
-            }
-            else -> Unit
+        if (otpState is OtpUiState.Error) {
+            localError = (otpState as OtpUiState.Error).message
         }
-    }
-
-    LaunchedEffect(showOtpModal, remainingSeconds) {
-        if (showOtpModal && remainingSeconds > 0) {
-            delay(1.seconds)
-            remainingSeconds--
-        }
-    }
-
-    val formattedTime = remember(remainingSeconds) {
-        val minutes = remainingSeconds / 60
-        val seconds = remainingSeconds % 60
-        String.format(Locale.US, "%02d:%02d", minutes, seconds)
     }
 
     Scaffold(
@@ -135,11 +94,15 @@ fun EditProfileScreen(
                 .verticalScroll(scrollState)
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
+            // Top Header
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(vertical = 4.dp)
             ) {
-                IconButton(onClick = onBackClick) {
+                IconButton(onClick = {
+                    onLockReset()
+                    onBackClick()
+                }) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back",
@@ -157,6 +120,7 @@ fun EditProfileScreen(
 
             Spacer(modifier = Modifier.height(10.dp))
 
+            // Avatar Box
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -193,6 +157,7 @@ fun EditProfileScreen(
 
             Spacer(modifier = Modifier.height(18.dp))
 
+            // Section 1: Basic Information + Lock Indicator
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -251,6 +216,7 @@ fun EditProfileScreen(
 
             Spacer(modifier = Modifier.height(18.dp))
 
+            // Section 2: Emergency Contact
             Text(
                 text = "Emergency Contact",
                 color = Color.White.copy(alpha = 0.75f),
@@ -283,6 +249,7 @@ fun EditProfileScreen(
 
             Spacer(modifier = Modifier.height(18.dp))
 
+            // Section 3: Vehicle Information
             Text(
                 text = "Vehicle Information",
                 color = Color.White.copy(alpha = 0.75f),
@@ -313,7 +280,7 @@ fun EditProfileScreen(
                 )
             }
 
-            if (localError != null && !showOtpModal) {
+            if (localError != null) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = localError!!,
@@ -324,6 +291,8 @@ fun EditProfileScreen(
 
             Spacer(modifier = Modifier.height(22.dp))
 
+            // Button: "Edit Information" -> sends Gmail OTP & opens OTP Tab
+            // After OTP verified -> "Save Changes" -> updates Supabase
             Button(
                 onClick = {
                     if (!isEditingUnlocked) {
@@ -331,7 +300,7 @@ fun EditProfileScreen(
                             localError = "No email associated with this account."
                         } else {
                             localError = null
-                            otpViewModel.resend(identifier = verifiedEmail, purpose = "profile_update")
+                            onRequestEditOtp(verifiedEmail)
                         }
                     } else {
                         scope.launch {
@@ -346,7 +315,7 @@ fun EditProfileScreen(
                                 plateNumber.trim()
                             )
                             isSaving = false
-                            isEditingUnlocked = false
+                            onLockReset()
                         }
                     }
                 },
@@ -359,7 +328,7 @@ fun EditProfileScreen(
                     .fillMaxWidth()
                     .height(50.dp)
             ) {
-                if ((otpState is OtpUiState.Loading && !showOtpModal) || isSaving) {
+                if (otpState is OtpUiState.Loading || isSaving) {
                     CircularProgressIndicator(
                         color = Color.White,
                         modifier = Modifier.size(22.dp),
@@ -367,7 +336,7 @@ fun EditProfileScreen(
                     )
                 } else {
                     Text(
-                        text = if (isEditingUnlocked) "Save Changes" else "Change Info",
+                        text = if (isEditingUnlocked) "Save Changes" else "Edit Information",
                         color = Color.White,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold
@@ -376,138 +345,6 @@ fun EditProfileScreen(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
-        }
-    }
-
-    if (showOtpModal) {
-        Dialog(onDismissRequest = {
-            showOtpModal = false
-            otpViewModel.reset()
-        }) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(Color(0xFF1C1C1E))
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = "Verify Identity",
-                    color = Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "Enter the 6-digit OTP sent to\n$verifiedEmail",
-                    color = Color.White.copy(alpha = 0.7f),
-                    fontSize = 13.sp,
-                    textAlign = TextAlign.Center
-                )
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                Text(
-                    text = if (remainingSeconds > 0) "Expires in $formattedTime" else "OTP Expired",
-                    color = if (remainingSeconds > 60) Color(0xFF22C55E) else Color(0xFFCB1010),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                OutlinedTextField(
-                    value = otpInput,
-                    onValueChange = { input ->
-                        val digitsOnly = input.filter { it.isDigit() }.take(6)
-                        otpInput = digitsOnly
-                        localError = null
-
-                        if (digitsOnly.length == 6 && otpState !is OtpUiState.Loading) {
-                            if (remainingSeconds <= 0) {
-                                localError = "OTP expired. Please resend a new code."
-                            } else {
-                                otpViewModel.verify(
-                                    identifier = verifiedEmail,
-                                    code = digitsOnly,
-                                    purpose = "profile_update"
-                                )
-                            }
-                        }
-                    },
-                    enabled = otpState !is OtpUiState.Loading,
-                    singleLine = true,
-                    placeholder = {
-                        Text(
-                            text = "000000",
-                            color = Color.White.copy(alpha = 0.3f),
-                            modifier = Modifier.fillMaxWidth(),
-                            textAlign = TextAlign.Center
-                        )
-                    },
-                    textStyle = LocalTextStyle.current.copy(
-                        color = Color.White,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center,
-                        letterSpacing = 6.sp
-                    ),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = Color(0xFF313135),
-                        unfocusedContainerColor = Color(0xFF313135),
-                        focusedBorderColor = Color(0xFF0F0B94),
-                        unfocusedBorderColor = Color.Transparent
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                if (otpState is OtpUiState.Loading) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    CircularProgressIndicator(
-                        color = Color.White,
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.dp
-                    )
-                }
-
-                if (localError != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = localError!!,
-                        color = Color(0xFFCB1010),
-                        fontSize = 12.sp,
-                        textAlign = TextAlign.Center
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    TextButton(onClick = {
-                        showOtpModal = false
-                        otpViewModel.reset()
-                    }) {
-                        Text("Cancel", color = Color.White.copy(alpha = 0.6f))
-                    }
-                    TextButton(
-                        onClick = {
-                            otpViewModel.resend(
-                                identifier = verifiedEmail,
-                                purpose = "profile_update"
-                            )
-                        },
-                        enabled = remainingSeconds <= 540 && otpState !is OtpUiState.Loading
-                    ) {
-                        Text("Resend OTP", color = Color(0xFF3B82F6))
-                    }
-                }
-            }
         }
     }
 }

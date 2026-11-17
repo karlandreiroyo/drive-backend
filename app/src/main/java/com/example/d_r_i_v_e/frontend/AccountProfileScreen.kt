@@ -80,13 +80,12 @@ fun AccountProfileScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Profile Header Card (Name + Vehicle Type & Plate Number)
+            // View-Only Profile Header Card (Driver Name + Vehicle Type & Plate Number)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
                     .background(Color(0xFF1C1C1E))
-                    .clickable(onClick = onProfileRowClick)
                     .padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -120,16 +119,11 @@ fun AccountProfileScreen(
                         fontWeight = FontWeight.Medium
                     )
                 }
-                Icon(
-                    imageVector = Icons.Filled.ChevronRight,
-                    contentDescription = null,
-                    tint = Color.White.copy(alpha = 0.4f)
-                )
             }
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Menu Options
+            // Menu Options (Edit Profile button lang ang clickable papuntang EditProfileScreen)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()

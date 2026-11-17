@@ -33,6 +33,8 @@ fun AppNavigation() {
     var otpResetToken by remember { mutableStateOf<String?>(null) }
     var otpPurpose by remember { mutableStateOf("signup") }
     var awaitingResetCode by remember { mutableStateOf(false) }
+    var awaitingProfileOtp by remember { mutableStateOf(false) }
+    var isProfileEditUnlocked by remember { mutableStateOf(false) }
     var welcomeName by remember { mutableStateOf<String?>(null) }
 
     var screenHistory by remember {
@@ -64,9 +66,12 @@ fun AppNavigation() {
         if (screenHistory.size > 1) goBack() else resetTo("dashboard")
     }
 
-    LaunchedEffect(otpState, awaitingResetCode) {
-        if (awaitingResetCode && otpState is OtpUiState.Resent) {
+    // Navigate to OTP screen once Gmail OTP request succeeds (Forgot Password OR Edit Profile)
+    LaunchedEffect(otpState, awaitingResetCode, awaitingProfileOtp) {
+        if ((awaitingResetCode || awaitingProfileOtp) && otpState is OtpUiState.Resent) {
             awaitingResetCode = false
+            awaitingProfileOtp = false
+            otpViewModel.reset()
             navigateTo("otp")
         }
     }
@@ -113,6 +118,7 @@ fun AppNavigation() {
         selectedGoogleAccount = null
         knownAccounts = emptyList()
         showAccountChooser = false
+        isProfileEditUnlocked = false
     }
 
     LaunchedEffect(Unit) {
@@ -232,11 +238,19 @@ fun AppNavigation() {
                     otpResetToken = verified.resetToken
                     verified.identifier?.let { otpIdentifier = it }
                     otpViewModel.reset()
-                    if (otpPurpose == "signup") {
-                        Toast.makeText(context, "Email verified! You can now log in.", Toast.LENGTH_LONG).show()
-                        navigateTo("login")
-                    } else {
-                        navigateTo("createPassword")
+                    when (otpPurpose) {
+                        "signup" -> {
+                            Toast.makeText(context, "Email verified! You can now log in.", Toast.LENGTH_LONG).show()
+                            navigateTo("login")
+                        }
+                        "edit_profile" -> {
+                            isProfileEditUnlocked = true
+                            Toast.makeText(context, "OTP Verified! You can now edit your information.", Toast.LENGTH_SHORT).show()
+                            goBack()
+                        }
+                        else -> {
+                            navigateTo("createPassword")
+                        }
                     }
                 }
             }
@@ -250,9 +264,16 @@ fun AppNavigation() {
                 },
                 onVerifyClick = { code ->
                     otpCode = code
-                    otpViewModel.verify(otpIdentifier, code, otpPurpose)
+                    val serverPurpose = if (otpPurpose == "edit_profile") "reset" else otpPurpose
+                    otpViewModel.verify(otpIdentifier, code, serverPurpose)
                 },
-                onResendClick = { otpViewModel.resend(otpIdentifier, otpPurpose) }
+                onResendClick = {
+                    if (otpPurpose == "edit_profile") {
+                        otpViewModel.forgotPassword(otpIdentifier)
+                    } else {
+                        otpViewModel.resend(otpIdentifier, otpPurpose)
+                    }
+                }
             )
         }
 
@@ -331,7 +352,11 @@ fun AppNavigation() {
             vehicleType = AuthSession.user?.vehicleType.orEmpty(),
             plateNumber = AuthSession.user?.plateNumber.orEmpty(),
             onBackClick = { goBack() },
-            onProfileRowClick = { navigateTo("editProfile") },
+            onProfileRowClick = {
+                isProfileEditUnlocked = false
+                otpViewModel.reset()
+                navigateTo("editProfile")
+            },
             onNotificationsClick = { navigateTo("notifications") },
             onTabDashboardClick = { navigateTo("dashboard") },
             onTabCameraClick = { navigateTo("liveFeed") },
@@ -348,6 +373,16 @@ fun AppNavigation() {
         )
 
         "editProfile" -> EditProfileScreen(
+            otpViewModel = otpViewModel,
+            isEditingUnlocked = isProfileEditUnlocked,
+            onRequestEditOtp = { userEmail ->
+                otpIdentifier = userEmail.trim().lowercase()
+                otpPurpose = "edit_profile"
+                otpCode = ""
+                awaitingProfileOtp = true
+                otpViewModel.forgotPassword(otpIdentifier)
+            },
+            onLockReset = { isProfileEditUnlocked = false },
             onBackClick = { goBack() },
             onTabDashboardClick = { navigateTo("dashboard") },
             onTabCameraClick = { navigateTo("liveFeed") },
@@ -365,7 +400,10 @@ fun AppNavigation() {
                     plateNumber = plateNumber
                 ) { success, message ->
                     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                    if (success) goBack()
+                    if (success) {
+                        isProfileEditUnlocked = false
+                        goBack()
+                    }
                 }
             }
         )
