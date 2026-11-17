@@ -54,7 +54,6 @@ fun TripHistoryScreen(
     val sessionStartedAt by detectionViewModel.sessionStartedAt.collectAsState()
     val liveIncidentCount by detectionViewModel.sessionDetectionCount.collectAsState()
 
-    // History streams from Room; opening the tab also nudges a background sync.
     LaunchedEffect(Unit) {
         historyViewModel.refresh()
     }
@@ -63,11 +62,9 @@ fun TripHistoryScreen(
     val sessionIncidentCount = liveIncidentCount
     var pendingDeleteTripId by remember { mutableStateOf<String?>(null) }
 
-    // Pagination states (10 items per page)
     var currentPage by remember { mutableIntStateOf(1) }
     val itemsPerPage = 10
 
-    // I-reset sa page 1 sakaling magbago ang listahan ng trips
     LaunchedEffect(state.trips.size) {
         currentPage = 1
     }
@@ -132,7 +129,6 @@ fun TripHistoryScreen(
                     }
                 }
 
-                // Ipakita lang ang mga trips para sa kasalukuyang page (max 10)
                 items(paginatedTrips, key = { it.id }) { trip ->
                     TripCard(
                         trip = trip,
@@ -140,7 +136,6 @@ fun TripHistoryScreen(
                     )
                 }
 
-                // Pagination Controls kung higit sa 10 ang trips
                 if (totalPages > 1) {
                     item {
                         Row(
@@ -486,23 +481,37 @@ private fun formatElapsed(totalSeconds: Long): String {
 }
 
 private fun formatIncidentTime(rawTime: String): String {
+    val trimmed = rawTime.trim()
+    if (trimmed.isEmpty()) return rawTime
+
+    if (trimmed.contains("AM", ignoreCase = true) || trimmed.contains("PM", ignoreCase = true)) {
+        return trimmed
+    }
+
     return try {
-        val num = rawTime.toLongOrNull()
+        val num = trimmed.toLongOrNull()
         if (num != null) {
-            val millis = if (num < 10000000000L) num * 1000 else num
+            val millis = if (num < 10_000_000_000L) num * 1000 else num
             val sdf = SimpleDateFormat("h:mm a", Locale.US)
             return sdf.format(Date(millis))
         }
-        if (rawTime.contains("T")) {
-            val cleanTime = rawTime.replace("Z", "+0000").replace("T", " ").substringBefore(".")
-            val parser = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
-            val date = parser.parse(cleanTime)
-            if (date != null) {
-                val formatter = SimpleDateFormat("h:mm a", Locale.US)
-                return formatter.format(date)
+
+        val cleanTime = trimmed.replace("Z", "+0000").replace("T", " ").substringBefore(".")
+        val formats = listOf(
+            SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US),
+            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
+        )
+        for (parser in formats) {
+            try {
+                val date = parser.parse(cleanTime)
+                if (date != null) {
+                    val formatter = SimpleDateFormat("h:mm a", Locale.US)
+                    return formatter.format(date)
+                }
+            } catch (_: Exception) {
             }
         }
-        rawTime
+        trimmed
     } catch (_: Exception) {
         rawTime
     }
