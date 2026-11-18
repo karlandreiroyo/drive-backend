@@ -140,15 +140,18 @@ fun LiveFeedScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .clip(RoundedCornerShape(20.dp))
+                        .clip(RoundedCornerShape(16.dp))
                         .background(Color(0xFF141414))
-                        .padding(10.dp)
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.SpaceBetween
                 ) {
+                    // Header row
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -156,22 +159,20 @@ fun LiveFeedScreen(
                         Text(
                             text = "Live Feed",
                             color = Color.White,
-                            fontSize = 18.sp,
+                            fontSize = 17.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
-
+                    // Pi Camera Bar (Compact)
                     PiCameraBar(handle = pi, isDrivingActive = isDrivingActive)
 
-                    Spacer(modifier = Modifier.height(8.dp))
-
+                    // Camera Preview Box with Integrated Compact Metrics Overlay
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
-                            .clip(RoundedCornerShape(16.dp))
+                            .clip(RoundedCornerShape(14.dp))
                             .background(Color(0xFF4A4A4C)),
                         contentAlignment = Alignment.Center
                     ) {
@@ -183,14 +184,14 @@ fun LiveFeedScreen(
                             LiveBadge(
                                 modifier = Modifier
                                     .align(Alignment.TopStart)
-                                    .padding(10.dp)
+                                    .padding(8.dp)
                             )
                             if (pi.enabled.value) {
                                 PiCameraPip(
                                     handle = pi,
                                     modifier = Modifier
                                         .align(Alignment.TopStart)
-                                        .padding(start = 10.dp, top = 40.dp)
+                                        .padding(start = 8.dp, top = 36.dp)
                                 )
                             }
                         } else {
@@ -199,61 +200,61 @@ fun LiveFeedScreen(
                                     imageVector = Icons.Filled.PhotoCamera,
                                     contentDescription = "Camera Stream",
                                     tint = Color.White.copy(alpha = 0.3f),
-                                    modifier = Modifier.size(64.dp)
+                                    modifier = Modifier.size(54.dp)
                                 )
                                 if (permissionDenied) {
-                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Spacer(modifier = Modifier.height(6.dp))
                                     Text(
                                         text = "Camera permission is required.",
                                         color = Color(0xFFFF4C4C),
-                                        fontSize = 12.sp,
+                                        fontSize = 11.sp,
                                         fontWeight = FontWeight.Medium
                                     )
                                 }
                             }
                         }
 
+                        // ESP32 Status badge
                         Row(
                             modifier = Modifier
                                 .align(Alignment.TopEnd)
-                                .padding(10.dp)
-                                .clip(RoundedCornerShape(8.dp))
+                                .padding(8.dp)
+                                .clip(RoundedCornerShape(6.dp))
                                 .background(Color(0xCC000000))
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                                .padding(horizontal = 6.dp, vertical = 3.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(8.dp)
+                                    .size(6.dp)
                                     .clip(CircleShape)
                                     .background(
                                         if (hardwareStatus.esp32Connected) Color(0xFF4CD964)
                                         else Color(0xFFFF6B6B)
                                     )
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(5.dp))
                             Text(
                                 text = if (hardwareStatus.esp32Connected) "ESP32: CONNECTED" else "ESP32: DISCONNECTED",
                                 color = if (hardwareStatus.esp32Connected) Color(0xFF4CD964)
                                 else Color(0xFFFF6B6B),
-                                fontSize = 10.sp,
+                                fontSize = 9.sp,
                                 fontWeight = FontWeight.Medium
                             )
                         }
 
-                        // Fully optimized throttled metrics overlay
+                        // Compact metrics overlay inside the bottom of the camera box
                         LiveMetricsOverlay(
                             detectionViewModel = detectionViewModel,
                             isDrivingActive = isDrivingActive,
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .fillMaxWidth()
-                                .padding(8.dp)
+                                .padding(6.dp)
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
-
+                    // Status Banner (Compact)
                     LiveStatusBanner(
                         detectionViewModel = detectionViewModel,
                         sessionState = sessionState,
@@ -262,6 +263,7 @@ fun LiveFeedScreen(
                         logStatus = logStatus,
                         statusMessage = statusMessage
                     )
+
                     val hardwareNote = when {
                         hardwareStatus.alertActive || isHardwareAlertActive ->
                             "Drowsy alert active (buzzer + vibration)"
@@ -276,15 +278,12 @@ fun LiveFeedScreen(
                             text = hardwareNote,
                             color = if (hardwareStatus.esp32Connected) Color(0xFFFF6B6B)
                             else Color.White.copy(alpha = 0.6f),
-                            fontSize = 11.sp,
-                            modifier = Modifier
-                                .padding(top = 4.dp)
-                                .align(Alignment.CenterHorizontally)
+                            fontSize = 10.sp,
+                            modifier = Modifier.align(Alignment.CenterHorizontally)
                         )
                     }
 
                     if (isDrivingActive && detectionCount > 0) {
-                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = buildString {
                                 append(detectionCount)
@@ -298,13 +297,12 @@ fun LiveFeedScreen(
                             } else {
                                 Color.White.copy(alpha = 0.5f)
                             },
-                            fontSize = 11.sp,
+                            fontSize = 10.sp,
                             modifier = Modifier.align(Alignment.CenterHorizontally)
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
-
+                    // Start / Stop Session Button
                     Button(
                         onClick = {
                             if (isDrivingActive) {
@@ -328,8 +326,8 @@ fun LiveFeedScreen(
                         enabled = !isSessionBusy && !permissionRequestInFlight,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(48.dp),
-                        shape = RoundedCornerShape(25.dp),
+                            .height(44.dp),
+                        shape = RoundedCornerShape(22.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (isDrivingActive) Color(0xFFD32F2F) else Color(0xFF0F0B94)
                         )
@@ -338,10 +336,10 @@ fun LiveFeedScreen(
                             imageVector = if (isDrivingActive) Icons.Filled.Stop else Icons.Filled.PlayArrow,
                             contentDescription = null,
                             tint = Color.White,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(18.dp)
                         )
 
-                        Spacer(modifier = Modifier.width(8.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
 
                         Text(
                             text = when {
@@ -352,13 +350,12 @@ fun LiveFeedScreen(
                                 else -> "Start Driving Session"
                             },
                             color = Color.White,
-                            fontSize = 15.sp,
+                            fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(6.dp))
-
+                    // Trip Duration Footer
                     LiveTripDurationFooter(
                         isDrivingActive = isDrivingActive,
                         sessionStartedAt = sessionStartedAt,
@@ -407,16 +404,12 @@ private fun LiveMetricsOverlay(
         metrics?.blinkRatePerMinute?.let { "$it bpm" } ?: if (isDrivingActive) "Calibrating…" else "--"
     }
 
-    val eyesText = remember(metrics) {
+    val eyesText = remember(metrics, isDrivingActive) {
         when {
             metrics == null -> if (isDrivingActive) "Calibrating…" else "--"
             metrics?.drowsy == true -> "Drowsy"
             else -> "Alert"
         }
-    }
-
-    val eyesSub = remember(metrics) {
-        metrics?.let { getFriendlyAlertLabel("drowsiness", it.drowsinessConfidence) }
     }
 
     val eyesColor = remember(metrics) {
@@ -431,31 +424,57 @@ private fun LiveMetricsOverlay(
         metrics?.headPoseLabel ?: if (isDrivingActive) "Calibrating…" else "--"
     }
 
-    val headSub = remember(metrics) {
-        metrics?.let { if (it.headPoseConfidence >= 0.7f) "Stable" else "Moving" }
-    }
-
     Row(
         modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        MetricChip(
+        CompactMetricChip(
             label = "Blink",
             value = blinkText,
             modifier = Modifier.weight(1f)
         )
-        MetricChip(
+        CompactMetricChip(
             label = "Eyes",
             value = eyesText,
-            sub = eyesSub,
             valueColor = eyesColor,
             modifier = Modifier.weight(1f)
         )
-        MetricChip(
+        CompactMetricChip(
             label = "Head",
             value = headText,
-            sub = headSub,
             modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun CompactMetricChip(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    valueColor: Color = Color.White
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xD9000000))
+            .padding(vertical = 4.dp, horizontal = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = label,
+            color = Color.White.copy(alpha = 0.6f),
+            fontSize = 9.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            text = value,
+            color = valueColor,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -474,9 +493,9 @@ private fun LiveStatusBanner(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(10.dp))
             .background(Color(0xFF4A4A4C))
-            .padding(vertical = 8.dp, horizontal = 16.dp),
+            .padding(vertical = 6.dp, horizontal = 12.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -497,7 +516,7 @@ private fun LiveStatusBanner(
                 isDrivingActive -> Color(0xFF4CD964)
                 else -> Color.White.copy(alpha = 0.7f)
             },
-            fontSize = 13.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Medium
         )
     }
@@ -529,7 +548,7 @@ private fun LiveTripDurationFooter(
             "Trip Duration: --:--:--"
         },
         color = Color.White.copy(alpha = 0.5f),
-        fontSize = 12.sp,
+        fontSize = 11.sp,
         modifier = modifier
     )
 }
@@ -627,22 +646,22 @@ private fun CameraPreview(
 private fun LiveBadge(modifier: Modifier = Modifier) {
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(6.dp))
             .background(Color(0xCC000000))
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+            .padding(horizontal = 6.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
-                .size(8.dp)
+                .size(6.dp)
                 .clip(CircleShape)
                 .background(Color(0xFFFF3B30))
         )
-        Spacer(modifier = Modifier.width(6.dp))
+        Spacer(modifier = Modifier.width(4.dp))
         Text(
             text = "LIVE",
             color = Color.White,
-            fontSize = 11.sp,
+            fontSize = 10.sp,
             fontWeight = FontWeight.Bold
         )
     }
@@ -656,39 +675,6 @@ internal fun formatTripDuration(totalSeconds: Long): String {
         String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
     } else {
         String.format(Locale.US, "%02d:%02d", minutes, seconds)
-    }
-}
-
-@Composable
-private fun MetricChip(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier,
-    sub: String? = null,
-    valueColor: Color = Color.White
-) {
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(Color(0xB3000000))
-            .padding(vertical = 6.dp, horizontal = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = label,
-            color = Color.White.copy(alpha = 0.6f),
-            fontSize = 10.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-        Text(
-            text = if (sub != null) "$value · $sub" else value,
-            color = valueColor,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
     }
 }
 
