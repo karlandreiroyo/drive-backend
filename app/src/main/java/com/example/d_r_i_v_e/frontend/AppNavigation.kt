@@ -495,8 +495,10 @@ fun AppNavigation() {
                         id = trip.id,
                         title = "Drive session",
                         dateLabel = trip.dateLabel,
-                        category = "drive",
-                        isAlertType = false
+                        totalDuration = trip.totalDuration,
+                        incidents = trip.incidents,
+                        category = if (trip.incidents.isNotEmpty()) "alert" else "drive",
+                        isAlertType = trip.incidents.isNotEmpty()
                     )
                 },
                 onRefresh = { tripHistoryViewModel.refresh() },

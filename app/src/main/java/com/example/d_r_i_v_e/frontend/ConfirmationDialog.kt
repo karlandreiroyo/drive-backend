@@ -28,6 +28,8 @@ import androidx.compose.ui.window.Dialog
 
 private val DangerRed = Color(0xFFE53935)
 private val DangerFill = Color(0xFF3A0A0A)
+private val RestoreGreen = Color(0xFF22C55E)
+private val RestoreFill = Color(0xFF0A2E18)
 
 @Composable
 fun ConfirmationDialog(
@@ -36,8 +38,12 @@ fun ConfirmationDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
     message: String? = null,
-    showWarningIcon: Boolean = true
+    showWarningIcon: Boolean = true,
+    isPositiveAction: Boolean = confirmLabel.contains("Restore", ignoreCase = true)
 ) {
+    val accentColor = if (isPositiveAction) RestoreGreen else DangerRed
+    val fillColor = if (isPositiveAction) RestoreFill else DangerFill
+
     Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
@@ -53,13 +59,13 @@ fun ConfirmationDialog(
                     modifier = Modifier
                         .size(56.dp)
                         .clip(CircleShape)
-                        .background(DangerFill)
-                        .border(2.dp, DangerRed, CircleShape),
+                        .background(fillColor)
+                        .border(2.dp, accentColor, CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "!",
-                        color = DangerRed,
+                        text = if (isPositiveAction) "✓" else "!",
+                        color = accentColor,
                         fontSize = 30.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -90,9 +96,9 @@ fun ConfirmationDialog(
 
             DialogButton(
                 label = confirmLabel,
-                textColor = DangerRed,
-                background = DangerFill,
-                borderColor = DangerRed,
+                textColor = accentColor,
+                background = fillColor,
+                borderColor = accentColor,
                 onClick = onConfirm
             )
 
