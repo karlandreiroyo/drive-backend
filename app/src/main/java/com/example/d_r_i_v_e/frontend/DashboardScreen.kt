@@ -3,7 +3,6 @@ package com.example.d_r_i_v_e.frontend
 import android.Manifest
 import android.content.pm.PackageManager
 import android.widget.Toast
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -57,6 +56,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
 import com.example.d_r_i_v_e.backend.routes.DrivingSessionState
 import com.example.d_r_i_v_e.backend.routes.LocalLogStatus
+import com.example.d_r_i_v_e.backend.routes.TripHistoryViewModel
 import kotlinx.coroutines.delay
 import java.util.Locale
 
@@ -74,7 +74,13 @@ fun DashboardScreen(
 ) {
     val context = LocalContext.current
     val activityOwner = context as? ViewModelStoreOwner
+
     val detectionViewModel: DetectionViewModel = if (activityOwner != null) {
+        viewModel(viewModelStoreOwner = activityOwner)
+    } else {
+        viewModel()
+    }
+    val tripHistoryViewModel: TripHistoryViewModel = if (activityOwner != null) {
         viewModel(viewModelStoreOwner = activityOwner)
     } else {
         viewModel()
@@ -86,6 +92,7 @@ fun DashboardScreen(
     val detectionCount by detectionViewModel.sessionDetectionCount.collectAsState()
     val logStatus by detectionViewModel.logStatus.collectAsState()
     val statusMessage by detectionViewModel.statusMessage.collectAsState()
+    val historyState by tripHistoryViewModel.state.collectAsState()
 
     val isDrivingActive = sessionState == DrivingSessionState.Active || sessionStartedAt != null
     val isSessionBusy = sessionState == DrivingSessionState.Starting ||
@@ -93,13 +100,28 @@ fun DashboardScreen(
     val isOnline = isDrivingActive
 
     var elapsedSeconds by remember { mutableLongStateOf(0L) }
+    var lastFinishedDuration by remember { mutableStateOf<String?>(null) }
+    var lastFinishedAlerts by remember { mutableStateOf<Int?>(null) }
     var permissionRequestInFlight by remember { mutableStateOf(false) }
+
+    // I-refresh ang trip history pagbukas ng Dashboard at kapag natapos ang session
+    LaunchedEffect(Unit) {
+        tripHistoryViewModel.refresh()
+    }
+
+    LaunchedEffect(sessionState) {
+        if (sessionState == DrivingSessionState.Idle) {
+            tripHistoryViewModel.refresh()
+        }
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         permissionRequestInFlight = false
         if (granted) {
+            lastFinishedDuration = null
+            lastFinishedAlerts = null
             detectionViewModel.startSession()
         } else {
             Toast.makeText(context, "Camera permission is required to start monitoring.", Toast.LENGTH_SHORT).show()
@@ -117,6 +139,22 @@ fun DashboardScreen(
             elapsedSeconds = 0L
         }
     }
+
+    // Kunin ang pinakahuling trip mula sa kaka-stop na session o sa saved trip history
+    val latestSavedTrip = historyState.trips.firstOrNull()
+    val displayedDuration = when {
+        isDrivingActive -> formatDashboardDuration(elapsedSeconds)
+        lastFinishedDuration != null -> lastFinishedDuration!!
+        latestSavedTrip != null -> formatSavedTripDuration(latestSavedTrip.totalDuration)
+        else -> "--:--:--"
+    }
+    val displayedAlerts = when {
+        isDrivingActive -> detectionCount.toString()
+        lastFinishedAlerts != null -> lastFinishedAlerts.toString()
+        latestSavedTrip != null -> latestSavedTrip.incidents.size.toString()
+        else -> "--"
+    }
+    val hasLastTripData = !isDrivingActive && (lastFinishedDuration != null || latestSavedTrip != null)
 
     val reading = when {
         !isDrivingActive -> DashboardReading.Unavailable
@@ -214,9 +252,13 @@ fun DashboardScreen(
                     ) {
                         InfoCard(
                             icon = Icons.Filled.Schedule,
-                            label = "Trip Duration",
-                            value = if (isDrivingActive) formatDashboardDuration(elapsedSeconds) else "--:--:--",
-                            valueColor = if (isDrivingActive) Color(0xFF4CD964) else Color.White,
+                            label = if (hasLastTripData) "Last Trip Duration" else "Trip Duration",
+                            value = displayedDuration,
+                            valueColor = when {
+                                isDrivingActive -> Color(0xFF4CD964)
+                                hasLastTripData -> Color.White
+                                else -> Color.White.copy(alpha = 0.7f)
+                            },
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight()
@@ -224,12 +266,14 @@ fun DashboardScreen(
 
                         InfoCard(
                             icon = Icons.Filled.Notifications,
-                            label = "Received Alerts",
-                            value = if (isDrivingActive) detectionCount.toString() else "--",
+                            label = if (hasLastTripData) "Last Trip Alerts" else "Received Alerts",
+                            value = displayedAlerts,
                             valueColor = when {
-                                !isDrivingActive -> Color.White
-                                detectionCount > 0 -> Color(0xFFFF5C5C)
-                                else -> Color(0xFF4CD964)
+                                isDrivingActive && detectionCount > 0 -> Color(0xFFFF5C5C)
+                                isDrivingActive -> Color(0xFF4CD964)
+                                hasLastTripData && (displayedAlerts.toIntOrNull() ?: 0) > 0 -> Color(0xFFFF5C5C)
+                                hasLastTripData -> Color(0xFF4CD964)
+                                else -> Color.White.copy(alpha = 0.7f)
                             },
                             modifier = Modifier
                                 .weight(1f)
@@ -283,13 +327,20 @@ fun DashboardScreen(
                     Button(
                         onClick = {
                             if (isDrivingActive) {
+                                // I-capture agad ang huling oras at alert count bago mag-reset ang ViewModel
+                                lastFinishedDuration = formatDashboardDuration(elapsedSeconds)
+                                lastFinishedAlerts = detectionCount
+
                                 detectionViewModel.finishSession { message ->
+                                    tripHistoryViewModel.refresh()
                                     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                                 }
                             } else if (
                                 ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
                                 PackageManager.PERMISSION_GRANTED
                             ) {
+                                lastFinishedDuration = null
+                                lastFinishedAlerts = null
                                 detectionViewModel.startSession()
                             } else {
                                 permissionRequestInFlight = true
@@ -554,8 +605,10 @@ private fun InfoCard(
         Text(
             text = value,
             color = valueColor,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Bold
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -565,4 +618,13 @@ private fun formatDashboardDuration(totalSeconds: Long): String {
     val minutes = (totalSeconds % 3600) / 60
     val seconds = totalSeconds % 60
     return String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
+}
+
+private fun formatSavedTripDuration(rawDuration: String): String {
+    val cleaned = rawDuration.removeSuffix(" total driving").trim()
+    return when {
+        cleaned.isBlank() || cleaned == "Duration unavailable" -> "Recorded"
+        cleaned.equals("Less than 1 min", ignoreCase = true) -> "< 1 min"
+        else -> cleaned
+    }
 }
