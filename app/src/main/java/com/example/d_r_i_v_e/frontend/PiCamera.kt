@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -245,7 +246,7 @@ private fun PiCameraSettingsDialog(
                     text = when {
                         state.isRequested -> "End the driving session to change the IP address."
                         !isDrivingActive -> "The Pi camera starts and stops with your driving session."
-                        else -> "Tap the Pi video on the live feed to enlarge it."
+                        else -> "Pi Camera is now displayed as the main video feed."
                     },
                     color = Color.Gray,
                     fontSize = 11.sp
@@ -263,22 +264,18 @@ private fun PiCameraSettingsDialog(
     )
 }
 
+/**
+ * Pi Camera Main Preview na sumasakop sa buong preview box kapag naka-on ang Pi Camera switch.
+ */
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
-internal fun PiCameraPip(handle: PiCameraHandle, modifier: Modifier = Modifier) {
+internal fun PiCameraMainPreview(handle: PiCameraHandle, modifier: Modifier = Modifier) {
     val state = handle.state
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    val shape = RoundedCornerShape(10.dp)
 
     Box(
         modifier = modifier
-            .animateContentSize()
-            .then(if (expanded) Modifier.fillMaxWidth(0.65f) else Modifier.width(128.dp))
-            .aspectRatio(16f / 9f)
-            .clip(shape)
-            .background(Color.Black)
-            .border(1.dp, Color.White.copy(alpha = 0.35f), shape)
-            .clickable { expanded = !expanded },
+            .fillMaxSize()
+            .background(Color.Black),
         contentAlignment = Alignment.Center
     ) {
         AndroidView(
@@ -302,25 +299,13 @@ internal fun PiCameraPip(handle: PiCameraHandle, modifier: Modifier = Modifier) 
         if (!state.isPlaying) {
             if (state.isRequested && !state.isFailure()) {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.size(36.dp),
                     color = Color.White,
-                    strokeWidth = 2.dp
+                    strokeWidth = 3.dp
                 )
             } else {
-                Text("Pi offline", color = Color.Gray, fontSize = 10.sp)
+                Text("Connecting to Pi Camera...", color = Color.Gray, fontSize = 13.sp)
             }
         }
-        Text(
-            text = "PI",
-            color = Color.White,
-            fontSize = 9.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(4.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(Color.Black.copy(alpha = 0.6f))
-                .padding(horizontal = 4.dp, vertical = 1.dp)
-        )
     }
 }

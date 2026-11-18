@@ -144,7 +144,6 @@ fun LiveFeedScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
-                // Malinis at balanseng layout na hindi na kailangang i-scroll
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -166,19 +165,31 @@ fun LiveFeedScreen(
                         )
                     }
 
-                    // Pi Camera Bar
+                    // Pi Camera Bar (Switch)
                     PiCameraBar(handle = pi, isDrivingActive = isDrivingActive)
 
-                    // Malaki at maluwag na Camera Preview Box with Integrated Metrics Overlay
+                    // Camera Preview Box: Pi Camera Main Stream or Phone Camera Preview
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .weight(1f) // Kumukuha ng sapat at malaking espasyo para sa malinaw na preview
+                            .weight(1f)
                             .clip(RoundedCornerShape(14.dp))
                             .background(Color(0xFF2C2C2E)),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (isDrivingActive && hasCameraPermission) {
+                        if (pi.enabled.value) {
+                            // Kapag naka-on ang Pi Camera, ito ang kusang magsisilbing main preview sa buong box
+                            PiCameraMainPreview(
+                                handle = pi,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            LiveBadge(
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(8.dp)
+                            )
+                        } else if (isDrivingActive && hasCameraPermission) {
+                            // Kapag naka-off ang Pi Camera, phone camera ang gagamitin
                             CameraPreview(
                                 onSurfaceChanged = onPreviewSurfaceChanged,
                                 modifier = Modifier.fillMaxSize()
@@ -188,14 +199,6 @@ fun LiveFeedScreen(
                                     .align(Alignment.TopStart)
                                     .padding(8.dp)
                             )
-                            if (pi.enabled.value) {
-                                PiCameraPip(
-                                    handle = pi,
-                                    modifier = Modifier
-                                        .align(Alignment.TopStart)
-                                        .padding(start = 8.dp, top = 36.dp)
-                                )
-                            }
                         } else {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Icon(
@@ -245,7 +248,7 @@ fun LiveFeedScreen(
                             )
                         }
 
-                        // Metrics overlay sa loob ng ibabang bahagi ng camera
+                        // Metrics overlay sa ibabang bahagi ng camera box
                         LiveMetricsOverlay(
                             detectionViewModel = detectionViewModel,
                             isDrivingActive = isDrivingActive,
