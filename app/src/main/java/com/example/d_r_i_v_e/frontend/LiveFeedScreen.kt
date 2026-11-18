@@ -115,13 +115,15 @@ fun LiveFeedScreen(
     }
 
     LaunchedEffect(lastEvent, isDrivingActive) {
-        showAlert = false
-        val event = lastEvent ?: return@LaunchedEffect
-        if (!isDrivingActive) return@LaunchedEffect
-        alertEvent = event
-        showAlert = true
-        delay(4_000)
-        showAlert = false
+        if (!isDrivingActive || lastEvent == null) {
+            showAlert = false
+            alertEvent = null
+        } else {
+            alertEvent = lastEvent
+            showAlert = true
+            delay(3_000)
+            showAlert = false
+        }
     }
 
     val pi = rememberPiCamera(isDrivingActive)
@@ -164,16 +166,16 @@ fun LiveFeedScreen(
                         )
                     }
 
-                    // Pi Camera Bar (Compact)
+                    // Pi Camera Bar
                     PiCameraBar(handle = pi, isDrivingActive = isDrivingActive)
 
-                    // Camera Preview Box with Integrated Compact Metrics Overlay
+                    // Camera Preview Box with Clean Integrated Metrics Overlay
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
                             .clip(RoundedCornerShape(14.dp))
-                            .background(Color(0xFF4A4A4C)),
+                            .background(Color(0xFF2C2C2E)),
                         contentAlignment = Alignment.Center
                     ) {
                         if (isDrivingActive && hasCameraPermission) {
@@ -243,18 +245,18 @@ fun LiveFeedScreen(
                             )
                         }
 
-                        // Compact metrics overlay inside the bottom of the camera box
+                        // Clean, non-intrusive metrics overlay at the bottom inside the camera preview
                         LiveMetricsOverlay(
                             detectionViewModel = detectionViewModel,
                             isDrivingActive = isDrivingActive,
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .fillMaxWidth()
-                                .padding(6.dp)
+                                .padding(8.dp)
                         )
                     }
 
-                    // Status Banner (Compact)
+                    // Status Banner
                     LiveStatusBanner(
                         detectionViewModel = detectionViewModel,
                         sessionState = sessionState,
@@ -426,7 +428,7 @@ private fun LiveMetricsOverlay(
 
     Row(
         modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         CompactMetricChip(
             label = "Blink",
@@ -456,22 +458,24 @@ private fun CompactMetricChip(
 ) {
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xD9000000))
-            .padding(vertical = 4.dp, horizontal = 4.dp),
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xE61C1C1E))
+            .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(10.dp))
+            .padding(vertical = 6.dp, horizontal = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
             text = label,
             color = Color.White.copy(alpha = 0.6f),
-            fontSize = 9.sp,
+            fontSize = 10.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+        Spacer(modifier = Modifier.height(2.dp))
         Text(
             text = value,
             color = valueColor,
-            fontSize = 11.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
