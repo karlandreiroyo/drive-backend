@@ -52,11 +52,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** Gaano katagal nakikita ang banner. */
 private const val ALERT_DURATION_MS = 3_000L
-
-/** Pahinga bago ulit lumabas ang banner, para hindi mag-blink kapag tuloy-tuloy ang detection. */
-private const val ALERT_COOLDOWN_MS = 4_000L
 
 @Composable
 fun TripHistoryScreen(
@@ -92,32 +88,41 @@ fun TripHistoryScreen(
 
     var showAlert by remember { mutableStateOf(false) }
     var alertEvent by remember { mutableStateOf<DetectionEvent?>(null) }
-    var lastAlertHiddenAt by remember { mutableLongStateOf(0L) }
+    // Itala ang timestamp ng huling event na naipakita na sa screen na ito para hindi maulit o ma-stuck
+    var handledEventTimestamp by remember { mutableLongStateOf(lastEvent?.timestamp ?: 0L) }
 
-    // 1) Taga-trigger: nagpapakita lang ng banner kung bago ang event, hindi pa nakikita,
-    //    at tapos na ang cooldown. Hindi nito ginagalaw ang timer ng pagtatago.
-    LaunchedEffect(lastEvent, isDrivingActive) {
+    // Itago agad ang banner kapag umalis sa screen na ito
+    DisposableEffect(Unit) {
+        onDispose {
+            showAlert = false
+            alertEvent = null
+        }
+    }
+
+    // Kapag hindi active ang driving session, siguraduhing nakatago ang banner
+    LaunchedEffect(isDrivingActive) {
+        if (!isDrivingActive) {
+            showAlert = false
+            alertEvent = null
+        }
+    }
+
+    // Magpakita lang ng banner kapag may BAGONG event na mas bago kaysa sa huling na-handle,
+    // at awtomatikong itago pagkalipas ng 3 segundo (kapareho ng flow sa LiveFeedScreen)
+    LaunchedEffect(lastEvent?.timestamp, isDrivingActive) {
         val event = lastEvent
         if (!isDrivingActive || event == null) {
             showAlert = false
             alertEvent = null
             return@LaunchedEffect
         }
-        val now = System.currentTimeMillis()
-        val isFresh = now - event.timestamp <= ALERT_DURATION_MS
-        val cooledDown = now - lastAlertHiddenAt >= ALERT_COOLDOWN_MS
-        if (!showAlert && isFresh && cooledDown) {
+
+        if (event.timestamp > handledEventTimestamp) {
+            handledEventTimestamp = event.timestamp
             alertEvent = event
             showAlert = true
-        }
-    }
-
-    // 2) Taga-tago: naka-key lang sa showAlert, kaya hindi ito nare-restart ng bagong events.
-    LaunchedEffect(showAlert) {
-        if (showAlert) {
             delay(ALERT_DURATION_MS)
             showAlert = false
-            lastAlertHiddenAt = System.currentTimeMillis()
         }
     }
 
@@ -279,7 +284,7 @@ fun TripHistoryScreen(
             )
         }
 
-        // Detection Alert Banner: 3 segundo lang, may cooldown, at pwedeng i-tap para i-dismiss
+        // Detection Alert Banner: awtomatikong mawawala pagkalipas ng 3 segundo o kapag pinindot
         AnimatedVisibility(
             visible = showAlert,
             modifier = Modifier
@@ -295,7 +300,6 @@ fun TripHistoryScreen(
                     logStatus = logStatus,
                     onDismiss = {
                         showAlert = false
-                        lastAlertHiddenAt = System.currentTimeMillis()
                     }
                 )
             }
@@ -623,26 +627,22 @@ private fun formatIncidentTime(rawTime: String): String {
     val trimmed = rawTime.trim()
     if (trimmed.isEmpty()) return rawTime
 
-    // Naka-format na (hal. "6:41 PM")
     if (trimmed.contains("AM", ignoreCase = true) || trimmed.contains("PM", ignoreCase = true)) {
         return trimmed
     }
 
-    val outFormat = SimpleDateFormat("h:mm a", Locale.US) // oras ng device
+    val outFormat = SimpleDateFormat("h:mm a", Locale.US)
 
-    // Epoch (seconds o millis)
     trimmed.toLongOrNull()?.let { num ->
         val millis = if (num < 10_000_000_000L) num * 1000 else num
         return outFormat.format(Date(millis))
     }
 
-    // ISO-8601 na may timezone (Z o +00:00)
     try {
         return outFormat.format(Date.from(java.time.OffsetDateTime.parse(trimmed).toInstant()))
     } catch (_: Exception) {
     }
 
-    // "yyyy-MM-dd HH:mm:ss" na walang timezone: ituring na UTC (galing Supabase)
     val cleanTime = trimmed.replace("T", " ").substringBefore(".")
     for (pattern in listOf("yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm")) {
         try {
