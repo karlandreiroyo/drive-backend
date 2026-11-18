@@ -10,11 +10,14 @@ import com.example.d_r_i_v_e.ml.DetectionResult
 import com.example.d_r_i_v_e.ml.DriverMonitorFrame
 import com.example.d_r_i_v_e.repository.DriveRepository
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.seconds
 
 data class DetectionEvent(
     val label: String,
@@ -45,6 +48,7 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
 
     private val _lastEvent = MutableStateFlow<DetectionEvent?>(null)
     val lastEvent: StateFlow<DetectionEvent?> = _lastEvent.asStateFlow()
+    private var clearEventJob: Job? = null
 
     // Latest per-frame metrics from the monitor; drives the Live Feed cards.
     private val _monitorFrame = MutableStateFlow<DriverMonitorFrame?>(null)
@@ -58,6 +62,11 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
 
     @Volatile
     private var activeTrip: TripEntity? = null
+
+    fun clearLastEvent() {
+        clearEventJob?.cancel()
+        _lastEvent.value = null
+    }
 
     fun startSession() {
         if (_sessionState.value != DrivingSessionState.Idle) return
@@ -75,7 +84,7 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         _sessionStartedAt.value = null
         _sessionDetectionCount.value = 0
         _sessionIncidents.value = emptyList()
-        _lastEvent.value = null
+        clearLastEvent()
         _monitorFrame.value = null
         _logStatus.value = LocalLogStatus.Idle
         _statusMessage.value = null
@@ -142,6 +151,16 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
             if (activeTrip?.id != trip.id || _sessionState.value != DrivingSessionState.Active) return@launch
             _sessionDetectionCount.update { it + 1 }
             _lastEvent.value = event
+
+            // Awtomatikong buburahin ang banner event pagkatapos ng 3 segundo para hindi ma-stuck sa lahat ng screens
+            clearEventJob?.cancel()
+            clearEventJob = viewModelScope.launch {
+                delay(3.seconds)
+                if (_lastEvent.value?.timestamp == event.timestamp) {
+                    _lastEvent.value = null
+                }
+            }
+
             _sessionIncidents.update { (it + event).takeLast(500) }
             _logStatus.value = LocalLogStatus.Saving
             try {
@@ -183,7 +202,7 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         _sessionStartedAt.value = null
         _sessionDetectionCount.value = 0
         _sessionIncidents.value = emptyList()
-        _lastEvent.value = null
+        clearLastEvent()
         _monitorFrame.value = null
         _logStatus.value = LocalLogStatus.Idle
         _statusMessage.value = null
@@ -245,7 +264,7 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         _sessionStartedAt.value = null
         _sessionDetectionCount.value = 0
         _sessionIncidents.value = emptyList()
-        _lastEvent.value = null
+        clearLastEvent()
         _monitorFrame.value = null
         _logStatus.value = LocalLogStatus.Idle
         _statusMessage.value = null
