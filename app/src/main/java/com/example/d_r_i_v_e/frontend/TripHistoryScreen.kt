@@ -45,14 +45,15 @@ import com.example.d_r_i_v_e.TripEntry
 import com.example.d_r_i_v_e.backend.routes.DetectionEvent
 import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
 import com.example.d_r_i_v_e.backend.routes.DrivingSessionState
-import com.example.d_r_i_v_e.backend.routes.LocalLogStatus
 import com.example.d_r_i_v_e.backend.routes.TripHistoryViewModel
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
+import kotlin.time.Duration.Companion.seconds
 
-private const val ALERT_DURATION_MS = 3_000L
+private val ALERT_DURATION = 3.seconds
 
 @Composable
 fun TripHistoryScreen(
@@ -80,7 +81,6 @@ fun TripHistoryScreen(
     val sessionStartedAt by detectionViewModel.sessionStartedAt.collectAsState()
     val liveIncidentCount by detectionViewModel.sessionDetectionCount.collectAsState()
     val lastEvent by detectionViewModel.lastEvent.collectAsState()
-    val logStatus by detectionViewModel.logStatus.collectAsState()
 
     val isDrivingActive = sessionState == DrivingSessionState.Active || sessionStartedAt != null
     val startedAt = if (isDrivingActive) sessionStartedAt else null
@@ -88,10 +88,8 @@ fun TripHistoryScreen(
 
     var showAlert by remember { mutableStateOf(false) }
     var alertEvent by remember { mutableStateOf<DetectionEvent?>(null) }
-    // Itala ang timestamp ng huling event na naipakita na sa screen na ito para hindi maulit o ma-stuck
     var handledEventTimestamp by remember { mutableLongStateOf(lastEvent?.timestamp ?: 0L) }
 
-    // Itago agad ang banner kapag umalis sa screen na ito
     DisposableEffect(Unit) {
         onDispose {
             showAlert = false
@@ -99,7 +97,6 @@ fun TripHistoryScreen(
         }
     }
 
-    // Kapag hindi active ang driving session, siguraduhing nakatago ang banner
     LaunchedEffect(isDrivingActive) {
         if (!isDrivingActive) {
             showAlert = false
@@ -107,8 +104,6 @@ fun TripHistoryScreen(
         }
     }
 
-    // Magpakita lang ng banner kapag may BAGONG event na mas bago kaysa sa huling na-handle,
-    // at awtomatikong itago pagkalipas ng 3 segundo (kapareho ng flow sa LiveFeedScreen)
     LaunchedEffect(lastEvent?.timestamp, isDrivingActive) {
         val event = lastEvent
         if (!isDrivingActive || event == null) {
@@ -121,7 +116,7 @@ fun TripHistoryScreen(
             handledEventTimestamp = event.timestamp
             alertEvent = event
             showAlert = true
-            delay(ALERT_DURATION_MS)
+            delay(ALERT_DURATION)
             showAlert = false
         }
     }
@@ -267,7 +262,6 @@ fun TripHistoryScreen(
             )
         }
 
-        // Confirmation Dialog kapag pinindot ang red delete/archive button
         pendingArchiveTrip?.let { trip ->
             ConfirmationDialog(
                 title = "Archive Trip History?",
@@ -284,7 +278,6 @@ fun TripHistoryScreen(
             )
         }
 
-        // Detection Alert Banner: awtomatikong mawawala pagkalipas ng 3 segundo o kapag pinindot
         AnimatedVisibility(
             visible = showAlert,
             modifier = Modifier
@@ -297,7 +290,6 @@ fun TripHistoryScreen(
             alertEvent?.let { event ->
                 TripHistoryAlertBanner(
                     event = event,
-                    logStatus = logStatus,
                     onDismiss = {
                         showAlert = false
                     }
@@ -310,7 +302,6 @@ fun TripHistoryScreen(
 @Composable
 private fun TripHistoryAlertBanner(
     event: DetectionEvent,
-    logStatus: LocalLogStatus,
     onDismiss: () -> Unit
 ) {
     Row(
@@ -364,7 +355,7 @@ private fun CurrentSessionCard(
     LaunchedEffect(sessionStartedAt) {
         while (true) {
             elapsedSeconds = ((System.currentTimeMillis() - sessionStartedAt) / 1_000).coerceAtLeast(0L)
-            delay(1_000)
+            delay(1.seconds)
         }
     }
 
@@ -638,16 +629,30 @@ private fun formatIncidentTime(rawTime: String): String {
         return outFormat.format(Date(millis))
     }
 
-    try {
-        return outFormat.format(Date.from(java.time.OffsetDateTime.parse(trimmed).toInstant()))
-    } catch (_: Exception) {
+    // API 24 compatible ISO-8601 parsing gamit ang SimpleDateFormat
+    val isoPatterns = listOf(
+        "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
+        "yyyy-MM-dd'T'HH:mm:ssXXX",
+        "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+        "yyyy-MM-dd'T'HH:mm:ss'Z'"
+    )
+    for (pattern in isoPatterns) {
+        try {
+            val parser = SimpleDateFormat(pattern, Locale.US).apply {
+                if (pattern.endsWith("'Z'")) {
+                    timeZone = TimeZone.getTimeZone("UTC")
+                }
+            }
+            parser.parse(trimmed)?.let { return outFormat.format(it) }
+        } catch (_: Exception) {
+        }
     }
 
     val cleanTime = trimmed.replace("T", " ").substringBefore(".")
     for (pattern in listOf("yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm")) {
         try {
             val parser = SimpleDateFormat(pattern, Locale.US).apply {
-                timeZone = java.util.TimeZone.getTimeZone("UTC")
+                timeZone = TimeZone.getTimeZone("UTC")
             }
             parser.parse(cleanTime)?.let { return outFormat.format(it) }
         } catch (_: Exception) {
