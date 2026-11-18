@@ -21,14 +21,13 @@ class Esp32AlertController(
     private val baseUrlProvider: () -> String
 ) {
 
-    private enum class AlertState { IDLE, ALERTING }
+    private enum class AlertState { IDLE, ALERTING, COOLDOWN }
 
     private val TAG = "Esp32AlertController"
 
-    // Timing thresholds: 500ms trigger kapag drowsy na ang frame (dahil may 5s hold na sa Monitor),
-    // at 5 seconds na tuloy-tuloy na alert bago mag-clear kapag gising na ang driver.
-    private val DROWSY_THRESHOLD_MS = 500L
-    private val AWAKE_THRESHOLD_MS = 5_000L
+    // Timing thresholds: Agad mag-alarm kapag drowsy, tapos may 2-second cooldown/tigil bago pwede mag-alarm ulit.
+    private val DROWSY_THRESHOLD_MS = 100L
+    private val COOLDOWN_DURATION_MS = 2_000L // 2 seconds na tigil bago mag-alarm ulit
 
     // Network tuning
     private val REQUEST_TIMEOUT_MS = 2_000L
@@ -36,7 +35,7 @@ class Esp32AlertController(
 
     @Volatile private var state = AlertState.IDLE
     @Volatile private var drowsyStartMs = -1L
-    @Volatile private var awakeStartMs = -1L
+    @Volatile private var cooldownStartMs = -1L
 
     private val alertInFlight = AtomicBoolean(false)
     private val clearInFlight = AtomicBoolean(false)
@@ -62,11 +61,11 @@ class Esp32AlertController(
         val requestGeneration = generation.get()
         if (!monitoringEnabled) return
         val now = System.currentTimeMillis()
+
         when (state) {
             AlertState.IDLE -> {
                 if (isDrowsy) {
                     if (drowsyStartMs < 0) drowsyStartMs = now
-                    awakeStartMs = -1L
                     val elapsed = now - drowsyStartMs
                     if (elapsed >= DROWSY_THRESHOLD_MS && alertInFlight.compareAndSet(false, true)) {
                         scope.launch { tryAlert(requestGeneration) }
@@ -77,15 +76,19 @@ class Esp32AlertController(
             }
 
             AlertState.ALERTING -> {
-                if (!isDrowsy) {
-                    if (awakeStartMs < 0) awakeStartMs = now
+                // Kapag nag-alarm na, agad nating i-clear/papatayin ang hardware para masunod ang 2-sec gap
+                if (clearInFlight.compareAndSet(false, true)) {
+                    scope.launch { tryClear(requestGeneration, enteringCooldown = true) }
+                }
+            }
+
+            AlertState.COOLDOWN -> {
+                // Pinapahinto muna ng 2 segundo bago payagang mag-detect at mag-alarm ulit
+                if (cooldownStartMs > 0 && (now - cooldownStartMs) >= COOLDOWN_DURATION_MS) {
+                    state = AlertState.IDLE
                     drowsyStartMs = -1L
-                    val elapsed = now - awakeStartMs
-                    if (elapsed >= AWAKE_THRESHOLD_MS && clearInFlight.compareAndSet(false, true)) {
-                        scope.launch { tryClear(requestGeneration) }
-                    }
-                } else {
-                    awakeStartMs = -1L
+                    cooldownStartMs = -1L
+                    Log.i(TAG, "Cooldown tapos na -> Estado ay IDLE na ulit para sa susunod na detection.")
                 }
             }
         }
@@ -97,8 +100,7 @@ class Esp32AlertController(
         val requestGeneration = generation.incrementAndGet()
         state = AlertState.IDLE
         drowsyStartMs = -1L
-        awakeStartMs = -1L
-        // Always queue a final clear; a skipped in-flight clear must not leave the buzzer on.
+        cooldownStartMs = -1L
         clearInFlight.set(true)
         scope.launch { tryClear(requestGeneration, forced = true) }
     }
@@ -108,7 +110,7 @@ class Esp32AlertController(
         generation.incrementAndGet()
         state = AlertState.IDLE
         drowsyStartMs = -1L
-        awakeStartMs = -1L
+        cooldownStartMs = -1L
         _alertActive.value = false
         monitoringEnabled = true
     }
@@ -123,10 +125,9 @@ class Esp32AlertController(
                 if (success) {
                     _alertActive.value = true
                     state = AlertState.ALERTING
-                    awakeStartMs = -1L
-                    Log.i(TAG, "State -> ALERTING (alertActive = true)")
+                    Log.i(TAG, "State -> ALERTING (Naka-trigger ang alarm sa hardware)")
                 } else {
-                    Log.w(TAG, "tryAlert() exhausted retries - staying IDLE, will retry next frame")
+                    Log.w(TAG, "tryAlert() exhausted retries - staying IDLE")
                 }
             }
         } finally {
@@ -134,22 +135,27 @@ class Esp32AlertController(
         }
     }
 
-    private suspend fun tryClear(requestGeneration: Long, forced: Boolean = false) {
+    private suspend fun tryClear(requestGeneration: Long, forced: Boolean = false, enteringCooldown: Boolean = false) {
         try {
-            // A final /clear must reach the hardware after any in-flight /alert.
             requestMutex.withLock {
                 if (!forced && requestGeneration != generation.get()) return@withLock
                 val url = "${baseUrlProvider().trimEnd('/')}/clear"
                 val success = sendWithRetry(url)
-                if (requestGeneration != generation.get()) return@withLock
+                if (!forced && requestGeneration != generation.get()) return@withLock
                 if (success) {
                     _alertActive.value = false
-                    state = AlertState.IDLE
-                    drowsyStartMs = -1L
-                    awakeStartMs = -1L
-                    Log.i(TAG, "State -> IDLE (alertActive = false)${if (forced) " [forced]" else ""}")
+                    if (enteringCooldown) {
+                        state = AlertState.COOLDOWN
+                        cooldownStartMs = System.currentTimeMillis()
+                        Log.i(TAG, "State -> COOLDOWN (Nag-alarm na, naghihintay ng 2 segundo bago mag-detect ulit)")
+                    } else {
+                        state = AlertState.IDLE
+                        drowsyStartMs = -1L
+                        cooldownStartMs = -1L
+                        Log.i(TAG, "State -> IDLE${if (forced) " [forced]" else ""}")
+                    }
                 } else {
-                    Log.w(TAG, "tryClear() exhausted retries - alertActive stays true, will retry")
+                    Log.w(TAG, "tryClear() exhausted retries - alertActive stays true")
                 }
             }
         } finally {
