@@ -2,12 +2,16 @@ package com.example.d_r_i_v_e.frontend
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.SystemClock
 import android.util.Log
+import android.util.Size
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.CameraState
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -34,8 +38,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "DrivingSessionMonitor"
+private const val ANALYSIS_INTERVAL_MS = 140L // ~7 FPS para hindi mag-overheat/lag kahit matagal ang biyahe
+private const val HARDWARE_PING_INTERVAL_MS = 250L
 
 @Composable
 fun DrivingSessionMonitor(
@@ -50,8 +57,8 @@ fun DrivingSessionMonitor(
     val lastEvent by detectionViewModel.lastEvent.collectAsState()
 
     val localAlertManager = if (isActive) rememberLocalAlertManager() else null
-    // A final /clear must survive the screen leaving composition.
     val alertScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
+    val lastHardwareSignalAt = remember { AtomicLong(0L) }
 
     DisposableEffect(isActive, alertController) {
         if (isActive) {
@@ -76,7 +83,13 @@ fun DrivingSessionMonitor(
         detectionViewModel.onMonitorFrame(frame)
         if (detectionViewModel.sessionState.value == DrivingSessionState.Active) {
             val isAlertTriggered = frame.drowsy || (lastEvent != null)
-            alertController.onReading(isAlertTriggered, alertScope)
+            val now = SystemClock.elapsedRealtime()
+            val prev = lastHardwareSignalAt.get()
+            if (isAlertTriggered || now - prev >= HARDWARE_PING_INTERVAL_MS) {
+                if (lastHardwareSignalAt.compareAndSet(prev, now)) {
+                    alertController.onReading(isAlertTriggered, alertScope)
+                }
+            }
         }
     }
     val onFrame by rememberUpdatedState(handleFrame)
@@ -103,22 +116,46 @@ fun DrivingSessionMonitor(
         onDispose { disposed.set(true) }
     }
 
-    // Analysis use case: bound for as long as the session is active.
+    // Unified CameraX Lifecycle: Pinapanatiling active ang ImageAnalysis kahit mag-switch ng tabs
     DisposableEffect(provider, isActive, lifecycleOwner) {
         val cameraProvider = provider
         if (!isActive || cameraProvider == null) return@DisposableEffect onDispose { }
 
         val disposed = AtomicBoolean(false)
         val analysisExecutor = Executors.newSingleThreadExecutor()
+        val lastAnalyzedAt = AtomicLong(0L)
+
         val analyzer = DetectionAnalyzer(
             monitor = HeuristicDriverMonitor(),
             onEvent = { result -> if (!disposed.get()) onEvent(result) },
             onFrame = { frame -> if (!disposed.get()) onFrame(frame) }
         )
+
+        val resolutionSelector = ResolutionSelector.Builder()
+            .setResolutionStrategy(
+                ResolutionStrategy(
+                    Size(640, 480),
+                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
+                )
+            )
+            .build()
+
         val analysis = ImageAnalysis.Builder()
+            .setResolutionSelector(resolutionSelector)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
-            .also { it.setAnalyzer(analysisExecutor, analyzer) }
+            .also { imageAnalysis ->
+                imageAnalysis.setAnalyzer(analysisExecutor) { imageProxy ->
+                    val now = SystemClock.elapsedRealtime()
+                    if (disposed.get() || now - lastAnalyzedAt.get() < ANALYSIS_INTERVAL_MS) {
+                        imageProxy.close()
+                        return@setAnalyzer
+                    }
+                    lastAnalyzedAt.set(now)
+                    analyzer.analyze(imageProxy)
+                }
+            }
+
         var camera: Camera? = null
         val cameraObserver = Observer<CameraState> { state ->
             val error = state.error
@@ -130,11 +167,13 @@ fun DrivingSessionMonitor(
 
         try {
             check(hasCameraPermission(context)) { "Camera permission is not granted" }
-            camera = cameraProvider.bindToLifecycle(
+            cameraProvider.unbindAll()
+            val boundCamera = cameraProvider.bindToLifecycle(
                 lifecycleOwner, selectCamera(cameraProvider), analysis
             )
-            camera.cameraInfo.cameraState.observe(lifecycleOwner, cameraObserver)
-            Log.d(TAG, "Camera analyzer bound")
+            camera = boundCamera
+            boundCamera.cameraInfo.cameraState.observe(lifecycleOwner, cameraObserver)
+            Log.d(TAG, "Camera analyzer bound (640x480 throttled)")
         } catch (e: Exception) {
             Log.e(TAG, "Camera analyzer binding failed", e)
             detectionViewModel.onCameraError("Camera failed to start (${e.javaClass.simpleName}). Check Logcat: $TAG.")
@@ -145,13 +184,12 @@ fun DrivingSessionMonitor(
             camera?.cameraInfo?.cameraState?.removeObserver(cameraObserver)
             analysis.clearAnalyzer()
             cameraProvider.unbind(analysis)
-            // Close on the analyzer queue, after any in-flight frame finishes.
             analysisExecutor.execute { analyzer.close() }
             analysisExecutor.shutdown()
         }
     }
 
-    // Preview use case: only while the Live Feed is showing the camera.
+    // Preview use case: naka-bind lang kapag nasa Live Feed screen, hindi nakaka-interrupt sa ImageAnalysis
     DisposableEffect(provider, isActive, previewSurface, lifecycleOwner) {
         val cameraProvider = provider
         if (!isActive || cameraProvider == null || previewSurface == null) {
@@ -172,7 +210,6 @@ private fun hasCameraPermission(context: android.content.Context): Boolean =
     ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
 
-// Preview and analysis must share one camera, so selection is deterministic.
 private fun selectCamera(provider: ProcessCameraProvider): CameraSelector = when {
     provider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA) -> CameraSelector.DEFAULT_FRONT_CAMERA
     provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) -> CameraSelector.DEFAULT_BACK_CAMERA

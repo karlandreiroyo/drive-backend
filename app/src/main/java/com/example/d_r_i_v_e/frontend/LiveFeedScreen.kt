@@ -62,8 +62,6 @@ fun LiveFeedScreen(
     onTabMapClick: () -> Unit = {},
     onTabSettingsClick: () -> Unit = {}
 ) {
-    var elapsedSeconds by remember { mutableLongStateOf(0L) }
-
     val context = LocalContext.current
     val activityOwner = context as? ViewModelStoreOwner
     val detectionViewModel: DetectionViewModel = if (activityOwner != null) {
@@ -81,7 +79,6 @@ fun LiveFeedScreen(
     val lastEvent by detectionViewModel.lastEvent.collectAsState()
     val logStatus by detectionViewModel.logStatus.collectAsState()
     val statusMessage by detectionViewModel.statusMessage.collectAsState()
-    val monitorFrame by detectionViewModel.monitorFrame.collectAsState()
 
     var showAlert by remember { mutableStateOf(false) }
     var alertEvent by remember { mutableStateOf<DetectionEvent?>(null) }
@@ -125,18 +122,6 @@ fun LiveFeedScreen(
         showAlert = true
         delay(4_000)
         showAlert = false
-    }
-
-    LaunchedEffect(isDrivingActive, sessionStartedAt) {
-        val startedAt = sessionStartedAt
-        if (isDrivingActive && startedAt != null) {
-            while (true) {
-                elapsedSeconds = ((System.currentTimeMillis() - startedAt) / 1_000).coerceAtLeast(0L)
-                delay(1_000)
-            }
-        } else {
-            elapsedSeconds = 0L
-        }
     }
 
     val pi = rememberPiCamera(isDrivingActive)
@@ -256,81 +241,28 @@ fun LiveFeedScreen(
                             )
                         }
 
-                        val metrics = monitorFrame
-                        Row(
+                        // Isolated metrics overlay so per-frame updates don't recompose CameraPreview
+                        LiveMetricsOverlay(
+                            detectionViewModel = detectionViewModel,
+                            isDrivingActive = isDrivingActive,
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .fillMaxWidth()
-                                .padding(8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            MetricChip(
-                                label = "Blink",
-                                value = metrics?.blinkRatePerMinute?.let { "$it bpm" }
-                                    ?: if (isDrivingActive) "Calibrating…" else "--",
-                                modifier = Modifier.weight(1f)
-                            )
-                            MetricChip(
-                                label = "Eyes",
-                                value = when {
-                                    metrics == null -> if (isDrivingActive) "Calibrating…" else "--"
-                                    metrics.drowsy -> "Drowsy"
-                                    else -> "Alert"
-                                },
-                                sub = metrics?.let {
-                                    getFriendlyAlertLabel("drowsiness", it.drowsinessConfidence)
-                                },
-                                valueColor = when {
-                                    metrics?.drowsy == true -> Color(0xFFFF6B6B)
-                                    metrics != null -> Color(0xFF4CD964)
-                                    else -> Color.White
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
-                            MetricChip(
-                                label = "Head",
-                                value = metrics?.headPoseLabel
-                                    ?: if (isDrivingActive) "Calibrating…" else "--",
-                                sub = metrics?.let {
-                                    if (it.headPoseConfidence >= 0.7f) "Stable" else "Moving"
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
+                                .padding(8.dp)
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFF4A4A4C))
-                            .padding(vertical = 8.dp, horizontal = 16.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = when {
-                                sessionState == DrivingSessionState.Starting -> "Starting session - preparing trip…"
-                                sessionState == DrivingSessionState.Stopping -> "Saving trip…"
-                                permissionDenied -> "Camera permission is required to start monitoring."
-                                logStatus == LocalLogStatus.Failed ->
-                                    statusMessage ?: "Couldn't start the session."
-                                isDrivingActive && monitorFrame == null -> "Session Active - Calibrating…"
-                                isDrivingActive && monitorFrame?.drowsy == true -> "Session Active - Drowsiness Detected"
-                                isDrivingActive -> "Session Active - Monitoring…"
-                                else -> "Readings Unavailable"
-                            },
-                            color = when {
-                                logStatus == LocalLogStatus.Failed || permissionDenied -> Color(0xFFFF6B6B)
-                                isDrivingActive && monitorFrame?.drowsy == true -> Color(0xFFFF6B6B)
-                                isDrivingActive -> Color(0xFF4CD964)
-                                else -> Color.White.copy(alpha = 0.7f)
-                            },
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
+                    // Isolated status pill so frame changes don't recompose outer layout
+                    LiveStatusBanner(
+                        detectionViewModel = detectionViewModel,
+                        sessionState = sessionState,
+                        isDrivingActive = isDrivingActive,
+                        permissionDenied = permissionDenied,
+                        logStatus = logStatus,
+                        statusMessage = statusMessage
+                    )
 
                     val hardwareNote = when {
                         !hardwareStatus.esp32Connected && hardwareStatus.message != null ->
@@ -427,14 +359,10 @@ fun LiveFeedScreen(
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    Text(
-                        text = if (isDrivingActive) {
-                            "Trip Duration: ${formatTripDuration(elapsedSeconds)}"
-                        } else {
-                            "Trip Duration: --:--:--"
-                        },
-                        color = Color.White.copy(alpha = 0.5f),
-                        fontSize = 12.sp,
+                    // Isolated 1-second timer so ticking every second never recomposes the camera preview
+                    LiveTripDurationFooter(
+                        isDrivingActive = isDrivingActive,
+                        sessionStartedAt = sessionStartedAt,
                         modifier = Modifier.align(Alignment.CenterHorizontally)
                     )
                 }
@@ -466,6 +394,127 @@ fun LiveFeedScreen(
             }
         }
     }
+}
+
+@Composable
+private fun LiveMetricsOverlay(
+    detectionViewModel: DetectionViewModel,
+    isDrivingActive: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val metrics by detectionViewModel.monitorFrame.collectAsState()
+
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        MetricChip(
+            label = "Blink",
+            value = metrics?.blinkRatePerMinute?.let { "$it bpm" }
+                ?: if (isDrivingActive) "Calibrating…" else "--",
+            modifier = Modifier.weight(1f)
+        )
+        MetricChip(
+            label = "Eyes",
+            value = when {
+                metrics == null -> if (isDrivingActive) "Calibrating…" else "--"
+                metrics?.drowsy == true -> "Drowsy"
+                else -> "Alert"
+            },
+            sub = metrics?.let {
+                getFriendlyAlertLabel("drowsiness", it.drowsinessConfidence)
+            },
+            valueColor = when {
+                metrics?.drowsy == true -> Color(0xFFFF6B6B)
+                metrics != null -> Color(0xFF4CD964)
+                else -> Color.White
+            },
+            modifier = Modifier.weight(1f)
+        )
+        MetricChip(
+            label = "Head",
+            value = metrics?.headPoseLabel
+                ?: if (isDrivingActive) "Calibrating…" else "--",
+            sub = metrics?.let {
+                if (it.headPoseConfidence >= 0.7f) "Stable" else "Moving"
+            },
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun LiveStatusBanner(
+    detectionViewModel: DetectionViewModel,
+    sessionState: DrivingSessionState,
+    isDrivingActive: Boolean,
+    permissionDenied: Boolean,
+    logStatus: LocalLogStatus,
+    statusMessage: String?
+) {
+    val monitorFrame by detectionViewModel.monitorFrame.collectAsState()
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFF4A4A4C))
+            .padding(vertical = 8.dp, horizontal = 16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = when {
+                sessionState == DrivingSessionState.Starting -> "Starting session - preparing trip…"
+                sessionState == DrivingSessionState.Stopping -> "Saving trip…"
+                permissionDenied -> "Camera permission is required to start monitoring."
+                logStatus == LocalLogStatus.Failed ->
+                    statusMessage ?: "Couldn't start the session."
+                isDrivingActive && monitorFrame == null -> "Session Active - Calibrating…"
+                isDrivingActive && monitorFrame?.drowsy == true -> "Session Active - Drowsiness Detected"
+                isDrivingActive -> "Session Active - Monitoring…"
+                else -> "Readings Unavailable"
+            },
+            color = when {
+                logStatus == LocalLogStatus.Failed || permissionDenied -> Color(0xFFFF6B6B)
+                isDrivingActive && monitorFrame?.drowsy == true -> Color(0xFFFF6B6B)
+                isDrivingActive -> Color(0xFF4CD964)
+                else -> Color.White.copy(alpha = 0.7f)
+            },
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
+@Composable
+private fun LiveTripDurationFooter(
+    isDrivingActive: Boolean,
+    sessionStartedAt: Long?,
+    modifier: Modifier = Modifier
+) {
+    var elapsedSeconds by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(isDrivingActive, sessionStartedAt) {
+        if (isDrivingActive && sessionStartedAt != null) {
+            while (true) {
+                elapsedSeconds = ((System.currentTimeMillis() - sessionStartedAt) / 1_000).coerceAtLeast(0L)
+                delay(1_000)
+            }
+        } else {
+            elapsedSeconds = 0L
+        }
+    }
+
+    Text(
+        text = if (isDrivingActive) {
+            "Trip Duration: ${formatTripDuration(elapsedSeconds)}"
+        } else {
+            "Trip Duration: --:--:--"
+        },
+        color = Color.White.copy(alpha = 0.5f),
+        fontSize = 12.sp,
+        modifier = modifier
+    )
 }
 
 @Composable
@@ -541,7 +590,7 @@ private fun CameraPreview(
     val previewView = remember {
         PreviewView(context).apply {
             scaleType = PreviewView.ScaleType.FILL_CENTER
-            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            implementationMode = PreviewView.ImplementationMode.PERFORMANCE
         }
     }
     val latestOnSurfaceChanged by rememberUpdatedState(onSurfaceChanged)
