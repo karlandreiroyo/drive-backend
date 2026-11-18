@@ -328,7 +328,7 @@ class DriveRepository internal constructor(
 
     /**
      * Upserts remote rows as synced without ever deleting local data,
-     * overwriting pending uploads/deletes, or wiping local `isArchived` flags.
+     * overwriting pending uploads/deletes, or wiping local archive state.
      */
     private suspend fun mergeRemoteHistory(userId: String, remoteTrips: List<RemoteTripDto>) {
         if (remoteTrips.isEmpty()) return
@@ -340,10 +340,22 @@ class DriveRepository internal constructor(
             if (remoteTrip.userId != userId || remoteTrip.id.isBlank()) continue
             if (remoteTrip.id in deletedTripIds) continue
 
+            val parsed = remoteTrip.toEntity()
             val existingLocal = tripDao.findById(remoteTrip.id)
-            val trip = remoteTrip.toEntity(
-                preserveArchived = existingLocal?.isArchived ?: false
-            )
+            val trip = if (existingLocal != null) {
+                existingLocal.copy(
+                    startTime = parsed.startTime,
+                    endTime = parsed.endTime,
+                    status = parsed.status,
+                    origin = parsed.origin,
+                    destination = parsed.destination,
+                    createdAt = parsed.createdAt,
+                    isSynced = true
+                )
+            } else {
+                parsed
+            }
+
             if (trip.id !in pendingTripIds) {
                 tripDao.upsert(trip)
             }
@@ -438,7 +450,7 @@ private fun Long.toUtcIso(): String =
 
 private const val PARSE_TAG = "DriveRepository"
 
-private fun RemoteTripDto.toEntity(preserveArchived: Boolean = false): TripEntity {
+private fun RemoteTripDto.toEntity(): TripEntity {
     val createdMillis = createdAt.toEpochMillisOrNull()
     val startMillis = startTime.toEpochMillisOrNull() ?: createdMillis ?: run {
         Log.w(PARSE_TAG, "Trip $id has no parseable start/created time: start='$startTime' created='$createdAt'")
@@ -454,7 +466,6 @@ private fun RemoteTripDto.toEntity(preserveArchived: Boolean = false): TripEntit
         destination = destination ?: "",
         createdAt = createdMillis ?: startMillis,
         isSynced = true,
-        isArchived = preserveArchived,
         isDeleted = false
     )
 }
