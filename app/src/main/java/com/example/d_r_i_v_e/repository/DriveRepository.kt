@@ -233,16 +233,18 @@ class DriveRepository internal constructor(
         }
     }
 
-    /** Moves a completed trip out of Trip History into the local archive. */
+    /** Moves a completed trip out of Trip History into the archive. */
     suspend fun archiveTrip(tripId: String) = writeMutex.withLock {
         if (tripDao.findById(tripId) == null) return@withLock
         tripDao.archive(tripId)
+        enqueueSync()
     }
 
     /** Returns an archived trip to Trip History. */
     suspend fun restoreTrip(tripId: String) = writeMutex.withLock {
         if (tripDao.findById(tripId) == null) return@withLock
         tripDao.restore(tripId)
+        enqueueSync()
     }
 
     /** Permanently deletes a trip (e.g. from the archive) and queues a remote delete. */
@@ -301,15 +303,15 @@ class DriveRepository internal constructor(
             applySyncResponse(response)
             lastOutcome = outcome
             fullBatch = trips.size == MAX_TRIPS || incidents.size == MAX_INCIDENTS ||
-                deletes.size == MAX_DELETES
+                    deletes.size == MAX_DELETES
             if (!fullBatch) return@withLock outcome
 
             val syncedTrips = response.tripsSynced.toSet()
             val syncedIncidents = response.incidentsSynced.toSet()
             val deletedTrips = response.deletedTripIds.toSet()
             val progressed = trips.any { it.id in syncedTrips } ||
-                incidents.any { it.id in syncedIncidents } ||
-                deletes.any { it.id in deletedTrips }
+                    incidents.any { it.id in syncedIncidents } ||
+                    deletes.any { it.id in deletedTrips }
             if (!progressed) {
                 return@withLock SyncOutcome.Failed("The server did not acknowledge any queued rows.")
             }
@@ -325,9 +327,8 @@ class DriveRepository internal constructor(
     }
 
     /**
-     * Upserts remote rows as synced without ever deleting local data or
-     * overwriting a row that still has pending uploads or a pending delete.
-     * Runs under [writeMutex]; scoped strictly to the authenticated [userId].
+     * Upserts remote rows as synced without ever deleting local data,
+     * overwriting pending uploads/deletes, or wiping local `isArchived` flags.
      */
     private suspend fun mergeRemoteHistory(userId: String, remoteTrips: List<RemoteTripDto>) {
         if (remoteTrips.isEmpty()) return
@@ -336,9 +337,16 @@ class DriveRepository internal constructor(
         val pendingIncidentIds = incidentDao.unsyncedIncidentIds(userId).toSet()
 
         for (remoteTrip in remoteTrips) {
-            val trip = remoteTrip.toEntity()
-            if (trip.userId != userId || trip.id.isBlank()) continue
-            if (trip.id !in pendingTripIds) tripDao.upsert(trip)
+            if (remoteTrip.userId != userId || remoteTrip.id.isBlank()) continue
+            if (remoteTrip.id in deletedTripIds) continue
+
+            val existingLocal = tripDao.findById(remoteTrip.id)
+            val trip = remoteTrip.toEntity(
+                preserveArchived = existingLocal?.isArchived ?: false
+            )
+            if (trip.id !in pendingTripIds) {
+                tripDao.upsert(trip)
+            }
 
             for (remoteIncident in remoteTrip.incidents) {
                 val incident = remoteIncident.toEntity()
@@ -430,9 +438,8 @@ private fun Long.toUtcIso(): String =
 
 private const val PARSE_TAG = "DriveRepository"
 
-private fun RemoteTripDto.toEntity(): TripEntity {
+private fun RemoteTripDto.toEntity(preserveArchived: Boolean = false): TripEntity {
     val createdMillis = createdAt.toEpochMillisOrNull()
-    // Huwag gumamit ng oras ngayon bilang fallback. Mas tama ang created_at ng server.
     val startMillis = startTime.toEpochMillisOrNull() ?: createdMillis ?: run {
         Log.w(PARSE_TAG, "Trip $id has no parseable start/created time: start='$startTime' created='$createdAt'")
         0L
@@ -447,6 +454,7 @@ private fun RemoteTripDto.toEntity(): TripEntity {
         destination = destination ?: "",
         createdAt = createdMillis ?: startMillis,
         isSynced = true,
+        isArchived = preserveArchived,
         isDeleted = false
     )
 }
@@ -474,10 +482,6 @@ private fun String?.toEpochMillisOrNull(): Long? {
     return parseIsoMillis(this)
 }
 
-/**
- * Tumatanggap ng: epoch (sec/ms), "2026-11-16T10:41:41Z", "...+00:00",
- * "2026-11-16 10:41:41+00" (Postgres style), at walang timezone (ituturing na UTC).
- */
 private fun parseIsoMillis(value: String): Long? {
     val raw = value.trim()
     if (raw.isEmpty()) return null

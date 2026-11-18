@@ -37,6 +37,7 @@ data class ArchiveEntry(
 @Composable
 fun ArchiveScreen(
     entries: List<ArchiveEntry>,
+    onRefresh: () -> Unit = {},
     onRestoreEntry: (String) -> Unit,
     onDeleteEntry: (String) -> Unit,
     onBackClick: () -> Unit = {},
@@ -45,6 +46,11 @@ fun ArchiveScreen(
     onTabMapClick: () -> Unit = {},
     onTabSettingsClick: () -> Unit = {}
 ) {
+    // Awtomatikong mag-refresh/mag-fetch ng archive list pagbukas ng screen o app refresh
+    LaunchedEffect(Unit) {
+        onRefresh()
+    }
+
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("All") }
     var pendingDeleteId by remember { mutableStateOf<String?>(null) }
@@ -167,13 +173,28 @@ fun ArchiveScreen(
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 20.dp)
             ) {
-                filteredEntries.forEach { entry ->
-                    ArchiveEntryCard(
-                        entry = entry,
-                        onRestoreClick = { pendingRestoreId = entry.id },
-                        onDeleteClick = { pendingDeleteId = entry.id }
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
+                if (filteredEntries.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 40.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No archived items found.",
+                            color = Color.White.copy(alpha = 0.5f),
+                            fontSize = 14.sp
+                        )
+                    }
+                } else {
+                    filteredEntries.forEach { entry ->
+                        ArchiveEntryCard(
+                            entry = entry,
+                            onRestoreClick = { pendingRestoreId = entry.id },
+                            onDeleteClick = { pendingDeleteId = entry.id }
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
             }

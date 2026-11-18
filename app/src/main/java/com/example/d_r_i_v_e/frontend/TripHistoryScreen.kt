@@ -197,11 +197,12 @@ fun TripHistoryScreen(
             )
         }
 
+        // Confirmation Dialog kapag pinindot ang red delete/archive button
         pendingDeleteTripId?.let { tripId ->
             ConfirmationDialog(
-                title = "Clear Trip History data?",
-                message = "This removes your existing report about your drowsiness, and will be archived.",
-                confirmLabel = "Clear Data",
+                title = "Archive Trip History?",
+                message = "This removes your trip log and moves it to the archive. You can restore it later if needed.",
+                confirmLabel = "Archive",
                 onConfirm = {
                     pendingDeleteTripId = null
                     historyViewModel.archiveTrip(tripId)

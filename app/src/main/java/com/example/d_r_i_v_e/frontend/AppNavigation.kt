@@ -499,6 +499,7 @@ fun AppNavigation() {
                         isAlertType = false
                     )
                 },
+                onRefresh = { tripHistoryViewModel.refresh() },
                 onRestoreEntry = { tripId ->
                     tripHistoryViewModel.restoreTrip(tripId) { restored ->
                         val message = if (restored) {
@@ -517,7 +518,6 @@ fun AppNavigation() {
                 onTabSettingsClick = { navigateTo("settings") }
             )
         }
-
         "helpSupport" -> HelpSupportScreen(
             reportState = reportState,
             onBackClick = { goBack() },
