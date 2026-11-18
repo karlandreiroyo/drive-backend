@@ -1,7 +1,7 @@
 """Raspberry Pi drowsiness-detection node.
 
 Pipeline:
-    Picamera2 (CSI IR-CUT, 640x480) -> YOLO classification (best.pt)
+    USB webcam (Logitech, MJPG, latest-frame thread) -> YOLO classification (best.pt)
         -> hysteresis debounce -> (optional) DROWSY_ALERT / CLEAR_ALERT over USB serial
         -> ESP32 drives buzzer + 6 vibration motors.
 
@@ -18,12 +18,17 @@ Detection keeps running even if the ESP32 is unplugged; the serial link
 auto-reconnects in the background (see serial_link.py). Press Q in the video
 window (or Ctrl+C in the terminal) to exit. Camera and serial are always
 released in the finally block.
+
+Optional config.py settings (defaults used if missing):
+    CAMERA_INDEX = 0     # /dev/video0
+    CAMERA_FPS = 30
+    INFER_IMGSZ = 224    # smaller input = faster inference on the Pi
 """
 
+import threading
 import time
 
 import cv2
-from picamera2 import Picamera2
 from ultralytics import YOLO
 
 import config
@@ -32,6 +37,47 @@ from serial_link import SerialLink
 
 # False (default): the app owns the ESP32 alert. True: the Pi sends DROWSY_ALERT / CLEAR_ALERT.
 PI_SENDS_ALERTS = bool(getattr(config, "PI_SENDS_ALERTS", False))
+
+
+class WebcamLatest:
+    """Logitech/USB webcam that always returns the most recent frame.
+
+    A background thread keeps reading, so slow inference never lets old
+    frames pile up in the driver buffer (the main cause of seconds of lag).
+    """
+
+    def __init__(self, index=0, width=640, height=480, fps=30):
+        self.cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))  # lighter on USB than YUYV
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self.cap.set(cv2.CAP_PROP_FPS, fps)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # do not queue old frames
+        if not self.cap.isOpened():
+            raise RuntimeError(f"Cannot open webcam at index {index}")
+        self._frame = None
+        self._lock = threading.Lock()
+        self._running = True
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def _loop(self):
+        while self._running:
+            ok, frame = self.cap.read()
+            if ok:
+                with self._lock:
+                    self._frame = frame
+            else:
+                time.sleep(0.01)
+
+    def read(self):
+        with self._lock:
+            return None if self._frame is None else self._frame.copy()
+
+    def stop(self):
+        self._running = False
+        self._thread.join(timeout=1)
+        self.cap.release()
 
 
 def draw_line(frame, text, row, color):
@@ -45,7 +91,7 @@ def draw_line(frame, text, row, color):
 def main():
     link = None
     backend = None
-    picam2 = None
+    cam = None
     frame_count = 0
 
     try:
@@ -85,18 +131,15 @@ def main():
         model = YOLO(config.MODEL_PATH)
         print(f"Trained class names: {model.names}")
 
-        # --- CSI IR-CUT camera via Picamera2 ---
-        print("Initializing Raspberry Pi IR-CUT camera...")
-        picam2 = Picamera2()
-        picam2.configure(
-            picam2.create_video_configuration(
-                main={
-                    "size": (config.CAMERA_WIDTH, config.CAMERA_HEIGHT),
-                    "format": config.CAMERA_FORMAT,
-                }
-            )
+        # --- USB webcam (Logitech) ---
+        print("Initializing USB webcam...")
+        cam = WebcamLatest(
+            index=getattr(config, "CAMERA_INDEX", 0),
+            width=config.CAMERA_WIDTH,
+            height=config.CAMERA_HEIGHT,
+            fps=getattr(config, "CAMERA_FPS", 30),
         )
-        picam2.start()
+        infer_size = getattr(config, "INFER_IMGSZ", 224)
         print("Live detection started. Press Q in the video window to exit.")
 
         drowsy_streak = 0
@@ -108,15 +151,14 @@ def main():
         prev_handshake = False
 
         while True:
-            frame = picam2.capture_array()
-            if frame is None:
-                print("Failed to capture camera frame.")
-                break
+            frame_bgr = cam.read()
+            if frame_bgr is None:  # first frame not ready yet
+                time.sleep(0.01)
+                continue
             frame_count += 1
-            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
             # --- Inference (classification: top-1 class + confidence) ---
-            results = model(frame_bgr, verbose=False)
+            results = model(frame_bgr, verbose=False, imgsz=infer_size)
             probs = results[0].probs
             if probs is None:
                 if not warned_no_probs:
@@ -230,10 +272,9 @@ def main():
             link.stop()
         if backend is not None:
             backend.stop()
-        if picam2 is not None:
+        if cam is not None:
             try:
-                picam2.stop()
-                picam2.close()
+                cam.stop()
             except Exception:  # noqa: BLE001
                 pass
         cv2.destroyAllWindows()
