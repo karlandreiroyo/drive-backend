@@ -3,6 +3,7 @@ package com.example.d_r_i_v_e.frontend
 import android.Manifest
 import android.content.pm.PackageManager
 import android.widget.Toast
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -47,14 +48,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
 import com.example.d_r_i_v_e.backend.routes.DrivingSessionState
 import com.example.d_r_i_v_e.backend.routes.LocalLogStatus
 import kotlinx.coroutines.delay
+import java.util.Locale
 
 private enum class DashboardReading { Unavailable, Calibrating, Alert, MicroSleep }
 
@@ -69,14 +73,21 @@ fun DashboardScreen(
     onTabSettingsClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    val detectionViewModel: DetectionViewModel = viewModel()
+    val activityOwner = context as? ViewModelStoreOwner
+    val detectionViewModel: DetectionViewModel = if (activityOwner != null) {
+        viewModel(viewModelStoreOwner = activityOwner)
+    } else {
+        viewModel()
+    }
+
     val sessionState by detectionViewModel.sessionState.collectAsState()
     val sessionStartedAt by detectionViewModel.sessionStartedAt.collectAsState()
     val monitorFrame by detectionViewModel.monitorFrame.collectAsState()
     val detectionCount by detectionViewModel.sessionDetectionCount.collectAsState()
     val logStatus by detectionViewModel.logStatus.collectAsState()
     val statusMessage by detectionViewModel.statusMessage.collectAsState()
-    val isDrivingActive = sessionState == DrivingSessionState.Active
+
+    val isDrivingActive = sessionState == DrivingSessionState.Active || sessionStartedAt != null
     val isSessionBusy = sessionState == DrivingSessionState.Starting ||
             sessionState == DrivingSessionState.Stopping
     val isOnline = isDrivingActive
@@ -96,13 +107,14 @@ fun DashboardScreen(
     }
 
     LaunchedEffect(isDrivingActive, sessionStartedAt) {
-        elapsedSeconds = 0L
-        val startedAt = sessionStartedAt ?: return@LaunchedEffect
-        if (isDrivingActive) {
+        val startedAt = sessionStartedAt
+        if (isDrivingActive && startedAt != null) {
             while (true) {
                 elapsedSeconds = ((System.currentTimeMillis() - startedAt) / 1_000).coerceAtLeast(0L)
                 delay(1_000)
             }
+        } else {
+            elapsedSeconds = 0L
         }
     }
 
@@ -131,13 +143,11 @@ fun DashboardScreen(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.systemBars)
         ) {
-
             // Content fills the space above the anchored bottom navigation.
             Column(
                 modifier = Modifier
@@ -145,7 +155,6 @@ fun DashboardScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
-
                 // Main card container
                 Column(
                     modifier = Modifier
@@ -154,14 +163,12 @@ fun DashboardScreen(
                         .background(Color(0xFF141414))
                         .padding(20.dp)
                 ) {
-
                     // Header row: Dashboard title + Offline/Online badge
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-
                         Text(
                             text = "Dashboard",
                             color = Color.White,
@@ -173,24 +180,13 @@ fun DashboardScreen(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(20.dp))
                                 .background(
-                                    if (isOnline) {
-                                        Color(0xFF1B4D2E)
-                                    } else {
-                                        Color(0xFF4A1A1A)
-                                    }
+                                    if (isOnline) Color(0xFF1B4D2E) else Color(0xFF4A1A1A)
                                 )
-                                .padding(
-                                    horizontal = 14.dp,
-                                    vertical = 6.dp
-                                )
+                                .padding(horizontal = 14.dp, vertical = 6.dp)
                         ) {
                             Text(
                                 text = if (isOnline) "Online" else "Offline",
-                                color = if (isOnline) {
-                                    Color(0xFF4CD964)
-                                } else {
-                                    Color(0xFFFF5C5C)
-                                },
+                                color = if (isOnline) Color(0xFF4CD964) else Color(0xFFFF5C5C),
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -209,24 +205,35 @@ fun DashboardScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Trip Duration + Received Alerts row
+                    // Trip Duration + Received Alerts row (equal height & aligned)
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(IntrinsicSize.Max),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-
                         InfoCard(
                             icon = Icons.Filled.Schedule,
-                            label = "Trip Duration:",
-                            value = if (isDrivingActive) formatTripDuration(elapsedSeconds) else "--",
-                            modifier = Modifier.weight(1f)
+                            label = "Trip Duration",
+                            value = if (isDrivingActive) formatDashboardDuration(elapsedSeconds) else "--:--:--",
+                            valueColor = if (isDrivingActive) Color(0xFF4CD964) else Color.White,
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
                         )
 
                         InfoCard(
                             icon = Icons.Filled.Notifications,
-                            label = "Received Alerts:",
+                            label = "Received Alerts",
                             value = if (isDrivingActive) detectionCount.toString() else "--",
-                            modifier = Modifier.weight(1f)
+                            valueColor = when {
+                                !isDrivingActive -> Color.White
+                                detectionCount > 0 -> Color(0xFFFF5C5C)
+                                else -> Color(0xFF4CD964)
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
                         )
                     }
 
@@ -241,7 +248,6 @@ fun DashboardScreen(
                             .padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-
                         Icon(
                             imageVector = Icons.Filled.Bluetooth,
                             contentDescription = "Hardware status",
@@ -256,7 +262,6 @@ fun DashboardScreen(
                         Spacer(modifier = Modifier.width(12.dp))
 
                         Column {
-
                             Text(
                                 text = "Hardware Status:",
                                 color = Color.White.copy(alpha = 0.6f),
@@ -264,16 +269,8 @@ fun DashboardScreen(
                             )
 
                             Text(
-                                text = if (isHardwareConnected) {
-                                    "Connected"
-                                } else {
-                                    "Disconnected"
-                                },
-                                color = if (isHardwareConnected) {
-                                    Color.White
-                                } else {
-                                    Color(0xFFFF5C5C)
-                                },
+                                text = if (isHardwareConnected) "Connected" else "Disconnected",
+                                color = if (isHardwareConnected) Color.White else Color(0xFFFF5C5C),
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -305,10 +302,9 @@ fun DashboardScreen(
                             .height(52.dp),
                         shape = RoundedCornerShape(28.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = Color(0xFF0F0B94)
+                            containerColor = if (isDrivingActive) Color(0xFFCB1010) else Color(0xFF0F0B94)
                         )
                     ) {
-
                         Icon(
                             imageVector = if (isDrivingActive) Icons.Filled.Stop else Icons.Filled.PlayArrow,
                             contentDescription = null,
@@ -348,7 +344,7 @@ fun DashboardScreen(
                 }
             }
 
-            // Bottom navigation bar (anchored below the content area)
+            // Bottom navigation bar
             SharedBottomNav(
                 selectedTab = "dashboard",
                 onTabDashboardClick = onTabDashboardClick,
@@ -522,23 +518,23 @@ private fun InfoCard(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
     value: String,
+    valueColor: Color = Color.White,
     modifier: Modifier = Modifier
 ) {
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(14.dp))
             .background(Color(0xFF4A4A4C))
-            .padding(14.dp)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.SpaceBetween
     ) {
-
         Row(
             verticalAlignment = Alignment.CenterVertically
         ) {
-
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = Color.White.copy(alpha = 0.6f),
+                tint = Color.White.copy(alpha = 0.65f),
                 modifier = Modifier.size(16.dp)
             )
 
@@ -546,8 +542,10 @@ private fun InfoCard(
 
             Text(
                 text = label,
-                color = Color.White.copy(alpha = 0.6f),
-                fontSize = 12.sp
+                color = Color.White.copy(alpha = 0.65f),
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
 
@@ -555,9 +553,16 @@ private fun InfoCard(
 
         Text(
             text = value,
-            color = Color.White,
+            color = valueColor,
             fontSize = 18.sp,
             fontWeight = FontWeight.Bold
         )
     }
+}
+
+private fun formatDashboardDuration(totalSeconds: Long): String {
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
 }

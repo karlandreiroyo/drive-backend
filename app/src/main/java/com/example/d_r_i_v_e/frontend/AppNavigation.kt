@@ -3,8 +3,31 @@ package com.example.d_r_i_v_e.frontend
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.camera.core.Preview
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.d_r_i_v_e.backend.AuthSession
@@ -13,20 +36,35 @@ import com.example.d_r_i_v_e.backend.Esp32AlertController
 import com.example.d_r_i_v_e.backend.Esp32Service
 import com.example.d_r_i_v_e.backend.OtpUiState
 import com.example.d_r_i_v_e.backend.OtpViewModel
+import com.example.d_r_i_v_e.backend.routes.DetectionEvent
 import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
+import com.example.d_r_i_v_e.backend.routes.DrivingSessionState
 import com.example.d_r_i_v_e.backend.routes.HardwareStatus
 import com.example.d_r_i_v_e.backend.routes.HardwareStatusViewModel
+import com.example.d_r_i_v_e.backend.routes.LocalLogStatus
 import com.example.d_r_i_v_e.backend.routes.ReportViewModel
 import com.example.d_r_i_v_e.backend.routes.TripHistoryViewModel
+import kotlinx.coroutines.delay
 
 private val mainTabScreens = setOf("dashboard", "liveFeed", "tripHistory", "settings")
 
 @Composable
 fun AppNavigation() {
     val context = LocalContext.current
+    val activityOwner = context as? ViewModelStoreOwner
+
     val otpViewModel: OtpViewModel = viewModel()
-    val detectionViewModel: DetectionViewModel = viewModel()
-    val tripHistoryViewModel: TripHistoryViewModel = viewModel()
+    val detectionViewModel: DetectionViewModel = if (activityOwner != null) {
+        viewModel(viewModelStoreOwner = activityOwner)
+    } else {
+        viewModel()
+    }
+    val tripHistoryViewModel: TripHistoryViewModel = if (activityOwner != null) {
+        viewModel(viewModelStoreOwner = activityOwner)
+    } else {
+        viewModel()
+    }
+
     val otpState by otpViewModel.state.collectAsState()
     var otpIdentifier by remember { mutableStateOf("") }
     var otpCode by remember { mutableStateOf("") }
@@ -87,6 +125,28 @@ fun AppNavigation() {
         HardwareStatus()
     }
 
+    // Global alert state para lumabas ang alert banner kahit lumipat ng ibang tab
+    val sessionState by detectionViewModel.sessionState.collectAsState()
+    val sessionStartedAt by detectionViewModel.sessionStartedAt.collectAsState()
+    val isDrivingActive = sessionState == DrivingSessionState.Active || sessionStartedAt != null
+    val lastEvent by detectionViewModel.lastEvent.collectAsState()
+    val logStatus by detectionViewModel.logStatus.collectAsState()
+
+    var showGlobalAlert by remember { mutableStateOf(false) }
+    var globalAlertEvent by remember { mutableStateOf<DetectionEvent?>(null) }
+
+    LaunchedEffect(lastEvent, isDrivingActive) {
+        val event = lastEvent ?: return@LaunchedEffect
+        if (!isDrivingActive) {
+            showGlobalAlert = false
+            return@LaunchedEffect
+        }
+        globalAlertEvent = event
+        showGlobalAlert = true
+        delay(4_000)
+        showGlobalAlert = false
+    }
+
     var selectedGoogleAccount by remember { mutableStateOf<Pair<String, String>?>(null) }
     var knownAccounts by remember { mutableStateOf(listOf<GoogleAccountItem>()) }
     var showAccountChooser by remember { mutableStateOf(false) }
@@ -137,462 +197,549 @@ fun AppNavigation() {
         }
     }
 
+    // Patuloy na naka-bind sa background kahit null ang previewSurface (kapag lumipat sa ibang tab)
     DrivingSessionMonitor(
         detectionViewModel = detectionViewModel,
         alertController = alertController,
         previewSurface = previewSurface
     )
 
-    when (currentScreen) {
-        "onboarding" -> OnboardingScreen(
-            onFinished = { navigateTo("auth") },
-            onLoginClick = { navigateTo("auth") }
-        )
-
-        "auth" -> AuthScreen(
-            onSignUpClick = { navigateTo("signUp") },
-            onLogInClick = { navigateTo("login") }
-        )
-
-        "signUp" -> SignUpScreen(
-            signUpState = signUpState,
-            onBackClick = { goBack() },
-            onSignUpClick = { fullName, email, phoneNumber, emergencyName, emergencyPhone, vehicleType, plateNumber, password ->
-                otpIdentifier = email.trim().lowercase()
-                otpPurpose = "signup"
-                authViewModel.signUp(
-                    fullName = fullName,
-                    email = email,
-                    phoneNumber = phoneNumber,
-                    emergencyName = emergencyName,
-                    emergencyPhone = emergencyPhone,
-                    vehicleType = vehicleType,
-                    plateNumber = plateNumber,
-                    password = password
-                )
-            },
-            onLoginClick = { navigateTo("login") },
-            onSignUpSuccess = { navigateTo("otp") },
-            onResetState = { authViewModel.dismissDialog() }
-        )
-
-        "login" -> LoginScreen(
-            authViewModel = authViewModel,
-            onBackClick = { goBack() },
-            onLoginSuccess = {
-                welcomeName = AuthSession.user?.fullName?.trim()?.takeIf { it.isNotBlank() }
-                resetTo("dashboard")
-                tripHistoryViewModel.refresh()
-            },
-            onUnverified = { email ->
-                otpIdentifier = email.trim().lowercase()
-                otpPurpose = "signup"
-                otpViewModel.resend(otpIdentifier, "signup")
-                navigateTo("otp")
-            },
-            onForgotPasswordClick = { navigateTo("forgotPassword") },
-            onGoogleClick = { startGoogleSignIn() },
-            onSignUpClick = { navigateTo("signUp") }
-        )
-
-        "driverRegistration" -> DriverRegistrationScreen(
-            googleName = selectedGoogleAccount?.first ?: "",
-            googleEmail = selectedGoogleAccount?.second ?: "",
-            signUpState = signUpState,
-            onBackClick = { goBack() },
-            onCompleteRegistration = { profile ->
-                otpIdentifier = profile.email.trim().lowercase()
-                otpPurpose = "signup"
-                authViewModel.registerDriver(profile)
-            },
-            onNavigateToLogin = { navigateTo("otp") },
-            onResetState = { authViewModel.dismissDialog() }
-        )
-
-        "forgotPassword" -> {
-            LaunchedEffect(Unit) { otpViewModel.reset() }
-            ForgotPasswordScreen(
-                state = otpState,
-                onBackClick = {
-                    awaitingResetCode = false
-                    otpViewModel.reset()
-                    goBack()
-                },
-                onSendCodeClick = { identifier ->
-                    otpIdentifier = identifier
-                    otpPurpose = "reset"
-                    otpResetToken = null
-                    otpCode = ""
-                    isChangePasswordFromProfile = false
-                    awaitingResetCode = true
-                    otpViewModel.forgotPassword(otpIdentifier)
-                },
-                onLoginClick = {
-                    awaitingResetCode = false
-                    otpViewModel.reset()
-                    goBack()
-                }
+    Box(modifier = Modifier.fillMaxSize()) {
+        when (currentScreen) {
+            "onboarding" -> OnboardingScreen(
+                onFinished = { navigateTo("auth") },
+                onLoginClick = { navigateTo("auth") }
             )
-        }
 
-        "otp" -> {
-            LaunchedEffect(otpState) {
-                val verified = otpState as? OtpUiState.Verified
-                if (verified != null) {
-                    otpResetToken = verified.resetToken
-                    verified.identifier?.let { otpIdentifier = it }
-                    otpViewModel.reset()
-                    when (otpPurpose) {
-                        "signup" -> {
-                            Toast.makeText(context, "Email verified! You can now log in.", Toast.LENGTH_LONG).show()
-                            navigateTo("login")
-                        }
-                        "edit_profile" -> {
-                            isProfileEditUnlocked = true
-                            Toast.makeText(context, "OTP Verified! You can now edit your information.", Toast.LENGTH_SHORT).show()
-                            goBack()
-                        }
-                        else -> {
-                            if (isChangePasswordFromProfile) {
-                                isPasswordEditUnlocked = true
-                                Toast.makeText(context, "OTP Verified! Password unlocked.", Toast.LENGTH_SHORT).show()
+            "auth" -> AuthScreen(
+                onSignUpClick = { navigateTo("signUp") },
+                onLogInClick = { navigateTo("login") }
+            )
+
+            "signUp" -> SignUpScreen(
+                signUpState = signUpState,
+                onBackClick = { goBack() },
+                onSignUpClick = { fullName, email, phoneNumber, emergencyName, emergencyPhone, vehicleType, plateNumber, password ->
+                    otpIdentifier = email.trim().lowercase()
+                    otpPurpose = "signup"
+                    authViewModel.signUp(
+                        fullName = fullName,
+                        email = email,
+                        phoneNumber = phoneNumber,
+                        emergencyName = emergencyName,
+                        emergencyPhone = emergencyPhone,
+                        vehicleType = vehicleType,
+                        plateNumber = plateNumber,
+                        password = password
+                    )
+                },
+                onLoginClick = { navigateTo("login") },
+                onSignUpSuccess = { navigateTo("otp") },
+                onResetState = { authViewModel.dismissDialog() }
+            )
+
+            "login" -> LoginScreen(
+                authViewModel = authViewModel,
+                onBackClick = { goBack() },
+                onLoginSuccess = {
+                    welcomeName = AuthSession.user?.fullName?.trim()?.takeIf { it.isNotBlank() }
+                    resetTo("dashboard")
+                    tripHistoryViewModel.refresh()
+                },
+                onUnverified = { email ->
+                    otpIdentifier = email.trim().lowercase()
+                    otpPurpose = "signup"
+                    otpViewModel.resend(otpIdentifier, "signup")
+                    navigateTo("otp")
+                },
+                onForgotPasswordClick = { navigateTo("forgotPassword") },
+                onGoogleClick = { startGoogleSignIn() },
+                onSignUpClick = { navigateTo("signUp") }
+            )
+
+            "driverRegistration" -> DriverRegistrationScreen(
+                googleName = selectedGoogleAccount?.first ?: "",
+                googleEmail = selectedGoogleAccount?.second ?: "",
+                signUpState = signUpState,
+                onBackClick = { goBack() },
+                onCompleteRegistration = { profile ->
+                    otpIdentifier = profile.email.trim().lowercase()
+                    otpPurpose = "signup"
+                    authViewModel.registerDriver(profile)
+                },
+                onNavigateToLogin = { navigateTo("otp") },
+                onResetState = { authViewModel.dismissDialog() }
+            )
+
+            "forgotPassword" -> {
+                LaunchedEffect(Unit) { otpViewModel.reset() }
+                ForgotPasswordScreen(
+                    state = otpState,
+                    onBackClick = {
+                        awaitingResetCode = false
+                        otpViewModel.reset()
+                        goBack()
+                    },
+                    onSendCodeClick = { identifier ->
+                        otpIdentifier = identifier
+                        otpPurpose = "reset"
+                        otpResetToken = null
+                        otpCode = ""
+                        isChangePasswordFromProfile = false
+                        awaitingResetCode = true
+                        otpViewModel.forgotPassword(otpIdentifier)
+                    },
+                    onLoginClick = {
+                        awaitingResetCode = false
+                        otpViewModel.reset()
+                        goBack()
+                    }
+                )
+            }
+
+            "otp" -> {
+                LaunchedEffect(otpState) {
+                    val verified = otpState as? OtpUiState.Verified
+                    if (verified != null) {
+                        otpResetToken = verified.resetToken
+                        verified.identifier?.let { otpIdentifier = it }
+                        otpViewModel.reset()
+                        when (otpPurpose) {
+                            "signup" -> {
+                                Toast.makeText(context, "Email verified! You can now log in.", Toast.LENGTH_LONG).show()
+                                navigateTo("login")
+                            }
+                            "edit_profile" -> {
+                                isProfileEditUnlocked = true
+                                Toast.makeText(context, "OTP Verified! You can now edit your information.", Toast.LENGTH_SHORT).show()
                                 goBack()
-                            } else {
-                                navigateTo("createPassword")
+                            }
+                            else -> {
+                                if (isChangePasswordFromProfile) {
+                                    isPasswordEditUnlocked = true
+                                    Toast.makeText(context, "OTP Verified! Password unlocked.", Toast.LENGTH_SHORT).show()
+                                    goBack()
+                                } else {
+                                    navigateTo("createPassword")
+                                }
                             }
                         }
                     }
                 }
+                OtpVerificationScreen(
+                    maskedDestination = maskDestination(otpIdentifier),
+                    state = otpState,
+                    isPhoneNumber = !otpIdentifier.contains("@"),
+                    onBackClick = {
+                        otpViewModel.reset()
+                        goBack()
+                    },
+                    onVerifyClick = { code ->
+                        otpCode = code
+                        otpViewModel.verify(otpIdentifier, code, otpPurpose)
+                    },
+                    onResendClick = {
+                        if (otpPurpose == "reset") {
+                            otpViewModel.forgotPassword(otpIdentifier)
+                        } else {
+                            otpViewModel.resend(otpIdentifier, otpPurpose)
+                        }
+                    }
+                )
             }
-            OtpVerificationScreen(
-                maskedDestination = maskDestination(otpIdentifier),
-                state = otpState,
-                isPhoneNumber = !otpIdentifier.contains("@"),
-                onBackClick = {
-                    otpViewModel.reset()
-                    goBack()
-                },
-                onVerifyClick = { code ->
-                    otpCode = code
-                    otpViewModel.verify(otpIdentifier, code, otpPurpose)
-                },
-                onResendClick = {
-                    if (otpPurpose == "reset") {
-                        otpViewModel.forgotPassword(otpIdentifier)
-                    } else {
-                        otpViewModel.resend(otpIdentifier, otpPurpose)
+
+            "createPassword" -> {
+                val resetState = otpState
+                LaunchedEffect(resetState) {
+                    if (resetState is OtpUiState.PasswordReset) {
+                        Toast.makeText(context, resetState.message, Toast.LENGTH_LONG).show()
+                        otpViewModel.reset()
+                        otpCode = ""
+                        otpResetToken = null
+                        navigateTo("login")
                     }
                 }
-            )
-        }
-
-        "createPassword" -> {
-            val resetState = otpState
-            LaunchedEffect(resetState) {
-                if (resetState is OtpUiState.PasswordReset) {
-                    Toast.makeText(context, resetState.message, Toast.LENGTH_LONG).show()
-                    otpViewModel.reset()
-                    otpCode = ""
-                    otpResetToken = null
-                    navigateTo("login")
-                }
+                CreateNewPasswordScreen(
+                    isLoading = resetState is OtpUiState.Loading,
+                    serverError = (resetState as? OtpUiState.Error)?.message,
+                    onBackClick = { goBack() },
+                    onUpdatePasswordClick = { newPassword, _ ->
+                        otpViewModel.resetPassword(
+                            identifier = otpIdentifier,
+                            code = otpCode,
+                            newPassword = newPassword,
+                            resetToken = otpResetToken
+                        )
+                    }
+                )
             }
-            CreateNewPasswordScreen(
-                isLoading = resetState is OtpUiState.Loading,
-                serverError = (resetState as? OtpUiState.Error)?.message,
-                onBackClick = { goBack() },
-                onUpdatePasswordClick = { newPassword, _ ->
-                    otpViewModel.resetPassword(
-                        identifier = otpIdentifier,
-                        code = otpCode,
-                        newPassword = newPassword,
-                        resetToken = otpResetToken
-                    )
-                }
-            )
-        }
 
-        "dashboard" -> DashboardScreen(
-            isHardwareConnected = hardwareStatus.esp32Connected,
-            welcomeName = welcomeName,
-            onWelcomeDismissed = { welcomeName = null },
-            onTabDashboardClick = { navigateTo("dashboard") },
-            onTabCameraClick = { navigateTo("liveFeed") },
-            onTabMapClick = { navigateTo("tripHistory") },
-            onTabSettingsClick = { navigateTo("settings") }
-        )
-
-        "liveFeed" -> LiveFeedScreen(
-            hardwareStatus = hardwareStatus,
-            isHardwareAlertActive = isHardwareAlertActive,
-            onPreviewSurfaceChanged = { previewSurface = it },
-            onTabDashboardClick = { navigateTo("dashboard") },
-            onTabCameraClick = { navigateTo("liveFeed") },
-            onTabMapClick = { navigateTo("tripHistory") },
-            onTabSettingsClick = { navigateTo("settings") }
-        )
-
-        "tripHistory" -> TripHistoryScreen(
-            onTabDashboardClick = { navigateTo("dashboard") },
-            onTabCameraClick = { navigateTo("liveFeed") },
-            onTabMapClick = { navigateTo("tripHistory") },
-            onTabSettingsClick = { navigateTo("settings") }
-        )
-
-        "settings" -> SettingsScreen(
-            isHardwareConnected = hardwareStatus.esp32Connected,
-            onLogoutClick = {
-                clearSession()
-                resetTo("auth")
-            },
-            onAccountProfileClick = { navigateTo("accountProfile") },
-            onCalibrateDeviceClick = { navigateTo("calibrateDevice") },
-            onConfigureBuzzerClick = { navigateTo("configureBuzzer") },
-            onArchiveClick = { navigateTo("archive") },
-            onHelpSupportClick = { navigateTo("helpSupport") },
-            onTabDashboardClick = { navigateTo("dashboard") },
-            onTabCameraClick = { navigateTo("liveFeed") },
-            onTabMapClick = { navigateTo("tripHistory") },
-            onTabSettingsClick = { navigateTo("settings") }
-        )
-
-        "accountProfile" -> AccountProfileScreen(
-            driverName = AuthSession.user?.fullName ?: "Driver",
-            vehicleType = AuthSession.user?.vehicleType.orEmpty(),
-            plateNumber = AuthSession.user?.plateNumber.orEmpty(),
-            onBackClick = { goBack() },
-            onProfileRowClick = {
-                isProfileEditUnlocked = false
-                otpViewModel.reset()
-                navigateTo("editProfile")
-            },
-            onChangePasswordClick = {
-                isPasswordEditUnlocked = false
-                isChangePasswordFromProfile = true
-                otpViewModel.reset()
-                navigateTo("changePassword")
-            },
-            onNotificationsClick = { navigateTo("notifications") },
-            onTabDashboardClick = { navigateTo("dashboard") },
-            onTabCameraClick = { navigateTo("liveFeed") },
-            onTabMapClick = { navigateTo("tripHistory") },
-            onTabSettingsClick = { navigateTo("settings") }
-        )
-
-        "changePassword" -> {
-            val resetState = otpState
-            LaunchedEffect(resetState) {
-                if (resetState is OtpUiState.PasswordReset) {
-                    Toast.makeText(context, resetState.message, Toast.LENGTH_LONG).show()
-                    otpViewModel.reset()
-                    otpCode = ""
-                    otpResetToken = null
-                    isPasswordEditUnlocked = false
-                    isChangePasswordFromProfile = false
-                    goBack()
-                }
-            }
-            ChangePasswordScreen(
-                otpState = otpState,
-                isUnlocked = isPasswordEditUnlocked,
-                onRequestOtpClick = { userEmail ->
-                    otpIdentifier = userEmail.trim().lowercase()
-                    otpPurpose = "reset"
-                    otpResetToken = null
-                    otpCode = ""
-                    isChangePasswordFromProfile = true
-                    awaitingResetCode = true
-                    otpViewModel.forgotPassword(otpIdentifier)
-                },
-                onSavePasswordClick = { newPassword ->
-                    otpViewModel.resetPassword(
-                        identifier = otpIdentifier,
-                        code = otpCode,
-                        newPassword = newPassword,
-                        resetToken = otpResetToken
-                    )
-                },
-                onBackClick = {
-                    isPasswordEditUnlocked = false
-                    isChangePasswordFromProfile = false
-                    otpViewModel.reset()
-                    goBack()
-                },
+            "dashboard" -> DashboardScreen(
+                isHardwareConnected = hardwareStatus.esp32Connected,
+                welcomeName = welcomeName,
+                onWelcomeDismissed = { welcomeName = null },
                 onTabDashboardClick = { navigateTo("dashboard") },
                 onTabCameraClick = { navigateTo("liveFeed") },
                 onTabMapClick = { navigateTo("tripHistory") },
                 onTabSettingsClick = { navigateTo("settings") }
             )
-        }
 
-        "notifications" -> NotificationsScreen(
-            onBackClick = { goBack() },
-            onTabDashboardClick = { navigateTo("dashboard") },
-            onTabCameraClick = { navigateTo("liveFeed") },
-            onTabMapClick = { navigateTo("tripHistory") },
-            onTabSettingsClick = { navigateTo("settings") }
-        )
+            "liveFeed" -> LiveFeedScreen(
+                hardwareStatus = hardwareStatus,
+                isHardwareAlertActive = isHardwareAlertActive,
+                onPreviewSurfaceChanged = { previewSurface = it },
+                onTabDashboardClick = { navigateTo("dashboard") },
+                onTabCameraClick = { navigateTo("liveFeed") },
+                onTabMapClick = { navigateTo("tripHistory") },
+                onTabSettingsClick = { navigateTo("settings") }
+            )
 
-        "editProfile" -> EditProfileScreen(
-            otpViewModel = otpViewModel,
-            isEditingUnlocked = isProfileEditUnlocked,
-            onRequestEditOtp = { userEmail ->
-                otpIdentifier = userEmail.trim().lowercase()
-                otpPurpose = "edit_profile"
-                otpCode = ""
-                awaitingProfileOtp = true
-                otpViewModel.resend(otpIdentifier, "edit_profile")
-            },
-            onLockReset = { isProfileEditUnlocked = false },
-            onBackClick = { goBack() },
-            onTabDashboardClick = { navigateTo("dashboard") },
-            onTabCameraClick = { navigateTo("liveFeed") },
-            onTabMapClick = { navigateTo("tripHistory") },
-            onTabSettingsClick = { navigateTo("settings") },
-            onSaveToBackend = { fullName, email, phoneNumber, emergencyName, emergencyPhone, vehicleType, plateNumber ->
-                authViewModel.updateProfile(
-                    context = context,
-                    fullName = fullName,
-                    email = email,
-                    phoneNumber = phoneNumber,
-                    emergencyName = emergencyName,
-                    emergencyPhone = emergencyPhone,
-                    vehicleType = vehicleType,
-                    plateNumber = plateNumber
-                ) { success, message ->
-                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                    if (success) {
-                        isProfileEditUnlocked = false
+            "tripHistory" -> TripHistoryScreen(
+                onTabDashboardClick = { navigateTo("dashboard") },
+                onTabCameraClick = { navigateTo("liveFeed") },
+                onTabMapClick = { navigateTo("tripHistory") },
+                onTabSettingsClick = { navigateTo("settings") }
+            )
+
+            "settings" -> SettingsScreen(
+                isHardwareConnected = hardwareStatus.esp32Connected,
+                onLogoutClick = {
+                    clearSession()
+                    resetTo("auth")
+                },
+                onAccountProfileClick = { navigateTo("accountProfile") },
+                onCalibrateDeviceClick = { navigateTo("calibrateDevice") },
+                onConfigureBuzzerClick = { navigateTo("configureBuzzer") },
+                onArchiveClick = { navigateTo("archive") },
+                onHelpSupportClick = { navigateTo("helpSupport") },
+                onTabDashboardClick = { navigateTo("dashboard") },
+                onTabCameraClick = { navigateTo("liveFeed") },
+                onTabMapClick = { navigateTo("tripHistory") },
+                onTabSettingsClick = { navigateTo("settings") }
+            )
+
+            "accountProfile" -> AccountProfileScreen(
+                driverName = AuthSession.user?.fullName ?: "Driver",
+                vehicleType = AuthSession.user?.vehicleType.orEmpty(),
+                plateNumber = AuthSession.user?.plateNumber.orEmpty(),
+                onBackClick = { goBack() },
+                onProfileRowClick = {
+                    isProfileEditUnlocked = false
+                    otpViewModel.reset()
+                    navigateTo("editProfile")
+                },
+                onChangePasswordClick = {
+                    isPasswordEditUnlocked = false
+                    isChangePasswordFromProfile = true
+                    otpViewModel.reset()
+                    navigateTo("changePassword")
+                },
+                onNotificationsClick = { navigateTo("notifications") },
+                onTabDashboardClick = { navigateTo("dashboard") },
+                onTabCameraClick = { navigateTo("liveFeed") },
+                onTabMapClick = { navigateTo("tripHistory") },
+                onTabSettingsClick = { navigateTo("settings") }
+            )
+
+            "changePassword" -> {
+                val resetState = otpState
+                LaunchedEffect(resetState) {
+                    if (resetState is OtpUiState.PasswordReset) {
+                        Toast.makeText(context, resetState.message, Toast.LENGTH_LONG).show()
+                        otpViewModel.reset()
+                        otpCode = ""
+                        otpResetToken = null
+                        isPasswordEditUnlocked = false
+                        isChangePasswordFromProfile = false
                         goBack()
                     }
                 }
+                ChangePasswordScreen(
+                    otpState = otpState,
+                    isUnlocked = isPasswordEditUnlocked,
+                    onRequestOtpClick = { userEmail ->
+                        otpIdentifier = userEmail.trim().lowercase()
+                        otpPurpose = "reset"
+                        otpResetToken = null
+                        otpCode = ""
+                        isChangePasswordFromProfile = true
+                        awaitingResetCode = true
+                        otpViewModel.forgotPassword(otpIdentifier)
+                    },
+                    onSavePasswordClick = { newPassword ->
+                        otpViewModel.resetPassword(
+                            identifier = otpIdentifier,
+                            code = otpCode,
+                            newPassword = newPassword,
+                            resetToken = otpResetToken
+                        )
+                    },
+                    onBackClick = {
+                        isPasswordEditUnlocked = false
+                        isChangePasswordFromProfile = false
+                        otpViewModel.reset()
+                        goBack()
+                    },
+                    onTabDashboardClick = { navigateTo("dashboard") },
+                    onTabCameraClick = { navigateTo("liveFeed") },
+                    onTabMapClick = { navigateTo("tripHistory") },
+                    onTabSettingsClick = { navigateTo("settings") }
+                )
             }
-        )
 
-        "calibrateDevice" -> CalibrateDeviceScreen(
-            isHardwareConnected = hardwareStatus.esp32Connected,
-            onBackClick = { goBack() },
-            onStartCalibrationClick = { },
-            onTabDashboardClick = { navigateTo("dashboard") },
-            onTabCameraClick = { navigateTo("liveFeed") },
-            onTabMapClick = { navigateTo("tripHistory") },
-            onTabSettingsClick = { navigateTo("settings") }
-        )
-
-        "configureBuzzer" -> ConfigureBuzzerScreen(
-            onBackClick = { goBack() },
-            onTabDashboardClick = { navigateTo("dashboard") },
-            onTabCameraClick = { navigateTo("liveFeed") },
-            onTabMapClick = { navigateTo("tripHistory") },
-            onTabSettingsClick = { navigateTo("settings") }
-        )
-
-        "archive" -> {
-            val archiveState by tripHistoryViewModel.state.collectAsState()
-            ArchiveScreen(
-                entries = archiveState.archivedTrips.map { trip ->
-                    ArchiveEntry(
-                        id = trip.id,
-                        title = "Drive session",
-                        dateLabel = trip.dateLabel,
-                        totalDuration = trip.totalDuration,
-                        incidents = trip.incidents,
-                        category = if (trip.incidents.isNotEmpty()) "alert" else "drive",
-                        isAlertType = trip.incidents.isNotEmpty()
-                    )
-                },
-                onRefresh = { tripHistoryViewModel.refresh() },
-                onRestoreEntry = { tripId ->
-                    tripHistoryViewModel.restoreTrip(tripId) { restored ->
-                        val message = if (restored) {
-                            "Drive session restored to Trip History."
-                        } else {
-                            "Couldn't restore the drive session. Please try again."
-                        }
-                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                    }
-                },
-                onDeleteEntry = { tripId -> tripHistoryViewModel.deleteArchivedTrip(tripId) },
+            "notifications" -> NotificationsScreen(
                 onBackClick = { goBack() },
                 onTabDashboardClick = { navigateTo("dashboard") },
                 onTabCameraClick = { navigateTo("liveFeed") },
                 onTabMapClick = { navigateTo("tripHistory") },
                 onTabSettingsClick = { navigateTo("settings") }
             )
-        }
-        "helpSupport" -> HelpSupportScreen(
-            reportState = reportState,
-            onBackClick = { goBack() },
-            onSubmitReport = { subject, description ->
-                val userId = AuthSession.user?.id?.toLongOrNull()
-                if (userId == null) {
-                    Toast.makeText(context, "Please log in again to submit a report.", Toast.LENGTH_SHORT).show()
-                } else {
-                    reportViewModel.submit(userId, subject, description)
+
+            "editProfile" -> EditProfileScreen(
+                otpViewModel = otpViewModel,
+                isEditingUnlocked = isProfileEditUnlocked,
+                onRequestEditOtp = { userEmail ->
+                    otpIdentifier = userEmail.trim().lowercase()
+                    otpPurpose = "edit_profile"
+                    otpCode = ""
+                    awaitingProfileOtp = true
+                    otpViewModel.resend(otpIdentifier, "edit_profile")
+                },
+                onLockReset = { isProfileEditUnlocked = false },
+                onBackClick = { goBack() },
+                onTabDashboardClick = { navigateTo("dashboard") },
+                onTabCameraClick = { navigateTo("liveFeed") },
+                onTabMapClick = { navigateTo("tripHistory") },
+                onTabSettingsClick = { navigateTo("settings") },
+                onSaveToBackend = { fullName, email, phoneNumber, emergencyName, emergencyPhone, vehicleType, plateNumber ->
+                    authViewModel.updateProfile(
+                        context = context,
+                        fullName = fullName,
+                        email = email,
+                        phoneNumber = phoneNumber,
+                        emergencyName = emergencyName,
+                        emergencyPhone = emergencyPhone,
+                        vehicleType = vehicleType,
+                        plateNumber = plateNumber
+                    ) { success, message ->
+                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                        if (success) {
+                            isProfileEditUnlocked = false
+                            goBack()
+                        }
+                    }
                 }
-            },
-            onReportReset = { reportViewModel.reset() },
-            onContactSupportClick = { navigateTo("contactSupport") },
-            onFaqClick = { },
-            onReportIncidentClick = { navigateTo("reportIncident") },
-            onSuggestFeatureClick = { navigateTo("suggestFeature") },
-            onWhatSystemDetectsClick = { navigateTo("whatSystemDetects") },
-            onCameraPrivacyPolicyClick = { },
-            onPrivacyPolicyClick = { },
-            onTabDashboardClick = { navigateTo("dashboard") },
-            onTabCameraClick = { navigateTo("liveFeed") },
-            onTabMapClick = { navigateTo("tripHistory") },
-            onTabSettingsClick = { navigateTo("settings") }
-        )
+            )
 
-        "contactSupport" -> ContactSupportScreen(
-            onBackClick = { goBack() },
-            onSubmitMessage = { _, _ -> },
-            onAttachFileClick = { },
-            onTabDashboardClick = { navigateTo("dashboard") },
-            onTabCameraClick = { navigateTo("liveFeed") },
-            onTabMapClick = { navigateTo("tripHistory") },
-            onTabSettingsClick = { navigateTo("settings") }
-        )
+            "calibrateDevice" -> CalibrateDeviceScreen(
+                isHardwareConnected = hardwareStatus.esp32Connected,
+                onBackClick = { goBack() },
+                onStartCalibrationClick = { },
+                onTabDashboardClick = { navigateTo("dashboard") },
+                onTabCameraClick = { navigateTo("liveFeed") },
+                onTabMapClick = { navigateTo("tripHistory") },
+                onTabSettingsClick = { navigateTo("settings") }
+            )
 
-        "reportIncident" -> ReportIncidentScreen(
-            onBackClick = { goBack() },
-            onSubmitReport = { _, _ -> },
-            onAttachFileClick = { },
-            onTabDashboardClick = { navigateTo("dashboard") },
-            onTabCameraClick = { navigateTo("liveFeed") },
-            onTabMapClick = { navigateTo("tripHistory") },
-            onTabSettingsClick = { navigateTo("settings") }
-        )
+            "configureBuzzer" -> ConfigureBuzzerScreen(
+                onBackClick = { goBack() },
+                onTabDashboardClick = { navigateTo("dashboard") },
+                onTabCameraClick = { navigateTo("liveFeed") },
+                onTabMapClick = { navigateTo("tripHistory") },
+                onTabSettingsClick = { navigateTo("settings") }
+            )
 
-        "suggestFeature" -> SuggestFeatureScreen(
-            onBackClick = { goBack() },
-            onSubmitIdea = { _, _ -> },
-            onAttachFileClick = { },
-            onTabDashboardClick = { navigateTo("dashboard") },
-            onTabCameraClick = { navigateTo("liveFeed") },
-            onTabMapClick = { navigateTo("tripHistory") },
-            onTabSettingsClick = { navigateTo("settings") }
-        )
+            "archive" -> {
+                val archiveState by tripHistoryViewModel.state.collectAsState()
+                ArchiveScreen(
+                    entries = archiveState.archivedTrips.map { trip ->
+                        ArchiveEntry(
+                            id = trip.id,
+                            title = "Drive session",
+                            dateLabel = trip.dateLabel,
+                            totalDuration = trip.totalDuration,
+                            incidents = trip.incidents,
+                            category = if (trip.incidents.isNotEmpty()) "alert" else "drive",
+                            isAlertType = trip.incidents.isNotEmpty()
+                        )
+                    },
+                    onRefresh = { tripHistoryViewModel.refresh() },
+                    onRestoreEntry = { tripId ->
+                        tripHistoryViewModel.restoreTrip(tripId) { restored ->
+                            val message = if (restored) {
+                                "Drive session restored to Trip History."
+                            } else {
+                                "Couldn't restore the drive session. Please try again."
+                            }
+                            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    onDeleteEntry = { tripId -> tripHistoryViewModel.deleteArchivedTrip(tripId) },
+                    onBackClick = { goBack() },
+                    onTabDashboardClick = { navigateTo("dashboard") },
+                    onTabCameraClick = { navigateTo("liveFeed") },
+                    onTabMapClick = { navigateTo("tripHistory") },
+                    onTabSettingsClick = { navigateTo("settings") }
+                )
+            }
 
-        "whatSystemDetects" -> WhatSystemDetectsScreen(
-            onBackClick = { goBack() }
-        )
+            "helpSupport" -> HelpSupportScreen(
+                reportState = reportState,
+                onBackClick = { goBack() },
+                onSubmitReport = { subject, description ->
+                    val userId = AuthSession.user?.id?.toLongOrNull()
+                    if (userId == null) {
+                        Toast.makeText(context, "Please log in again to submit a report.", Toast.LENGTH_SHORT).show()
+                    } else {
+                        reportViewModel.submit(userId, subject, description)
+                    }
+                },
+                onReportReset = { reportViewModel.reset() },
+                onContactSupportClick = { navigateTo("contactSupport") },
+                onFaqClick = { },
+                onReportIncidentClick = { navigateTo("reportIncident") },
+                onSuggestFeatureClick = { navigateTo("suggestFeature") },
+                onWhatSystemDetectsClick = { navigateTo("whatSystemDetects") },
+                onCameraPrivacyPolicyClick = { },
+                onPrivacyPolicyClick = { },
+                onTabDashboardClick = { navigateTo("dashboard") },
+                onTabCameraClick = { navigateTo("liveFeed") },
+                onTabMapClick = { navigateTo("tripHistory") },
+                onTabSettingsClick = { navigateTo("settings") }
+            )
+
+            "contactSupport" -> ContactSupportScreen(
+                onBackClick = { goBack() },
+                onSubmitMessage = { _, _ -> },
+                onAttachFileClick = { },
+                onTabDashboardClick = { navigateTo("dashboard") },
+                onTabCameraClick = { navigateTo("liveFeed") },
+                onTabMapClick = { navigateTo("tripHistory") },
+                onTabSettingsClick = { navigateTo("settings") }
+            )
+
+            "reportIncident" -> ReportIncidentScreen(
+                onBackClick = { goBack() },
+                onSubmitReport = { _, _ -> },
+                onAttachFileClick = { },
+                onTabDashboardClick = { navigateTo("dashboard") },
+                onTabCameraClick = { navigateTo("liveFeed") },
+                onTabMapClick = { navigateTo("tripHistory") },
+                onTabSettingsClick = { navigateTo("settings") }
+            )
+
+            "suggestFeature" -> SuggestFeatureScreen(
+                onBackClick = { goBack() },
+                onSubmitIdea = { _, _ -> },
+                onAttachFileClick = { },
+                onTabDashboardClick = { navigateTo("dashboard") },
+                onTabCameraClick = { navigateTo("liveFeed") },
+                onTabMapClick = { navigateTo("tripHistory") },
+                onTabSettingsClick = { navigateTo("settings") }
+            )
+
+            "whatSystemDetects" -> WhatSystemDetectsScreen(
+                onBackClick = { goBack() }
+            )
+        }
+
+        // Global Alert Banner kapag nasa ibang tab (hindi liveFeed) at may na-detect
+        AnimatedVisibility(
+            visible = showGlobalAlert && currentScreen != "liveFeed",
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
+        ) {
+            globalAlertEvent?.let { event ->
+                GlobalDetectionAlertBanner(
+                    event = event,
+                    logStatus = logStatus
+                )
+            }
+        }
+
+        if (showAccountChooser) {
+            AccountChooserDialog(
+                accounts = knownAccounts,
+                onAccountClick = { account ->
+                    selectedGoogleAccount = Pair(account.name, account.email)
+                    showAccountChooser = false
+                    navigateTo("driverRegistration")
+                },
+                onAddAccountClick = {
+                    showAccountChooser = false
+                    launchRealGoogleSignIn()
+                },
+                onDismiss = { showAccountChooser = false }
+            )
+        }
     }
+}
 
-    if (showAccountChooser) {
-        AccountChooserDialog(
-            accounts = knownAccounts,
-            onAccountClick = { account ->
-                selectedGoogleAccount = Pair(account.name, account.email)
-                showAccountChooser = false
-                navigateTo("driverRegistration")
+@Composable
+private fun GlobalDetectionAlertBanner(
+    event: DetectionEvent,
+    logStatus: LocalLogStatus
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .shadow(14.dp, RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0xFF2B1212))
+            .border(1.dp, Color(0x66FF4C4C), RoundedCornerShape(18.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(Color(0x33FF4C4C)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Warning,
+                contentDescription = null,
+                tint = Color(0xFFFF6B6B),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "${event.label} detected",
+                color = Color(0xFFFF8A8A),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = when {
+                    event.confidence >= 0.7f -> "High-priority safety alert"
+                    else -> "Driver attention check recommended"
+                },
+                color = Color.White.copy(alpha = 0.65f),
+                fontSize = 11.sp
+            )
+        }
+        Text(
+            text = when (logStatus) {
+                LocalLogStatus.SavedOnline -> "Saved online"
+                LocalLogStatus.SavedOffline -> "Saved locally"
+                LocalLogStatus.Saving -> "Saving…"
+                LocalLogStatus.Failed -> "Save failed"
+                else -> ""
             },
-            onAddAccountClick = {
-                showAccountChooser = false
-                launchRealGoogleSignIn()
+            color = when (logStatus) {
+                LocalLogStatus.SavedOnline, LocalLogStatus.SavedOffline -> Color(0xFF4CD964)
+                LocalLogStatus.Failed -> Color(0xFFFF6B6B)
+                else -> Color.White.copy(alpha = 0.6f)
             },
-            onDismiss = { showAccountChooser = false }
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium
         )
     }
 }

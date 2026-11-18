@@ -26,14 +26,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.d_r_i_v_e.Incident
 import com.example.d_r_i_v_e.TripEntry
 import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
+import com.example.d_r_i_v_e.backend.routes.DrivingSessionState
 import com.example.d_r_i_v_e.backend.routes.TripHistoryViewModel
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -47,20 +50,34 @@ fun TripHistoryScreen(
     onTabMapClick: () -> Unit = {},
     onTabSettingsClick: () -> Unit = {}
 ) {
-    val historyViewModel: TripHistoryViewModel = viewModel()
-    val detectionViewModel: DetectionViewModel = viewModel()
+    val context = LocalContext.current
+    val activityOwner = context as? ViewModelStoreOwner
+
+    val historyViewModel: TripHistoryViewModel = if (activityOwner != null) {
+        viewModel(viewModelStoreOwner = activityOwner)
+    } else {
+        viewModel()
+    }
+    val detectionViewModel: DetectionViewModel = if (activityOwner != null) {
+        viewModel(viewModelStoreOwner = activityOwner)
+    } else {
+        viewModel()
+    }
 
     val state by historyViewModel.state.collectAsState()
+    val sessionState by detectionViewModel.sessionState.collectAsState()
     val sessionStartedAt by detectionViewModel.sessionStartedAt.collectAsState()
     val liveIncidentCount by detectionViewModel.sessionDetectionCount.collectAsState()
+
+    val isDrivingActive = sessionState == DrivingSessionState.Active || sessionStartedAt != null
+    val startedAt = if (isDrivingActive) sessionStartedAt else null
+    val sessionIncidentCount = liveIncidentCount
 
     LaunchedEffect(Unit) {
         historyViewModel.refresh()
     }
 
-    val startedAt = sessionStartedAt
-    val sessionIncidentCount = liveIncidentCount
-    var pendingDeleteTripId by remember { mutableStateOf<String?>(null) }
+    var pendingArchiveTrip by remember { mutableStateOf<TripEntry?>(null) }
 
     var currentPage by remember { mutableIntStateOf(1) }
     val itemsPerPage = 10
@@ -132,7 +149,7 @@ fun TripHistoryScreen(
                 items(paginatedTrips, key = { it.id }) { trip ->
                     TripCard(
                         trip = trip,
-                        onDeleteClick = { pendingDeleteTripId = trip.id }
+                        onDeleteClick = { pendingArchiveTrip = trip }
                     )
                 }
 
@@ -183,7 +200,7 @@ fun TripHistoryScreen(
 
                 if (!state.isLoading && state.trips.isEmpty()) {
                     item {
-                        EmptyTripsCard(hasActiveSession = sessionStartedAt != null)
+                        EmptyTripsCard(hasActiveSession = startedAt != null)
                     }
                 }
             }
@@ -198,16 +215,19 @@ fun TripHistoryScreen(
         }
 
         // Confirmation Dialog kapag pinindot ang red delete/archive button
-        pendingDeleteTripId?.let { tripId ->
+        pendingArchiveTrip?.let { trip ->
             ConfirmationDialog(
                 title = "Archive Trip History?",
-                message = "This removes your trip log and moves it to the archive. You can restore it later if needed.",
+                message = "Do you want to move \"${trip.dateLabel}\" to your Archive? You can view or restore it anytime.",
                 confirmLabel = "Archive",
+                showWarningIcon = true,
+                isPositiveAction = false,
                 onConfirm = {
-                    pendingDeleteTripId = null
-                    historyViewModel.archiveTrip(tripId)
+                    val id = trip.id
+                    pendingArchiveTrip = null
+                    historyViewModel.archiveTrip(id)
                 },
-                onDismiss = { pendingDeleteTripId = null }
+                onDismiss = { pendingArchiveTrip = null }
             )
         }
     }
@@ -254,9 +274,9 @@ private fun CurrentSessionCard(
             )
             Text(
                 text = formatElapsed(elapsedSeconds),
-                color = Color.White.copy(alpha = 0.7f),
+                color = Color(0xFF4CD964),
                 fontSize = 13.sp,
-                fontWeight = FontWeight.Medium
+                fontWeight = FontWeight.SemiBold
             )
         }
 

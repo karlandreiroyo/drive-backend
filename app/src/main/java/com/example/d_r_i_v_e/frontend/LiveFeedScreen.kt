@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.d_r_i_v_e.backend.routes.DetectionEvent
@@ -64,10 +65,16 @@ fun LiveFeedScreen(
     var elapsedSeconds by remember { mutableLongStateOf(0L) }
 
     val context = LocalContext.current
-    val detectionViewModel: DetectionViewModel = viewModel()
+    val activityOwner = context as? ViewModelStoreOwner
+    val detectionViewModel: DetectionViewModel = if (activityOwner != null) {
+        viewModel(viewModelStoreOwner = activityOwner)
+    } else {
+        viewModel()
+    }
+
     val sessionState by detectionViewModel.sessionState.collectAsState()
     val sessionStartedAt by detectionViewModel.sessionStartedAt.collectAsState()
-    val isDrivingActive = sessionState == DrivingSessionState.Active
+    val isDrivingActive = sessionState == DrivingSessionState.Active || sessionStartedAt != null
     val isSessionBusy = sessionState == DrivingSessionState.Starting ||
             sessionState == DrivingSessionState.Stopping
     val detectionCount by detectionViewModel.sessionDetectionCount.collectAsState()
@@ -121,13 +128,14 @@ fun LiveFeedScreen(
     }
 
     LaunchedEffect(isDrivingActive, sessionStartedAt) {
-        elapsedSeconds = 0L
-        val startedAt = sessionStartedAt ?: return@LaunchedEffect
-        if (isDrivingActive) {
+        val startedAt = sessionStartedAt
+        if (isDrivingActive && startedAt != null) {
             while (true) {
                 elapsedSeconds = ((System.currentTimeMillis() - startedAt) / 1_000).coerceAtLeast(0L)
                 delay(1_000)
             }
+        } else {
+            elapsedSeconds = 0L
         }
     }
 
@@ -618,9 +626,6 @@ private fun MetricChip(
     }
 }
 
-/**
- * Isang beses lang idineklara rito para maiwasan ang overload ambiguity at conflicting overloads.
- */
 private fun getFriendlyAlertLabel(incidentType: String, confidence: Float): String {
     val type = incidentType.trim().lowercase()
 
