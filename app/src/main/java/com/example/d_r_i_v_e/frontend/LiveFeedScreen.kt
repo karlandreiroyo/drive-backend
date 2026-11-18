@@ -16,8 +16,10 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
@@ -142,16 +144,17 @@ fun LiveFeedScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
+                // Ginawang scrollable para hindi maipit ang mga buttons sa ilalim
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color(0xFF141414))
+                        .verticalScroll(rememberScrollState())
                         .padding(10.dp),
-                    verticalArrangement = Arrangement.SpaceBetween
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     // Header row
                     Row(
@@ -173,7 +176,7 @@ fun LiveFeedScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .weight(1f)
+                            .height(260.dp) // Nilagyan ng fixed height para hindi sakupin ang buong screen
                             .clip(RoundedCornerShape(14.dp))
                             .background(Color(0xFF2C2C2E)),
                         contentAlignment = Alignment.Center
@@ -245,7 +248,7 @@ fun LiveFeedScreen(
                             )
                         }
 
-                        // Clean, non-intrusive metrics overlay at the bottom inside the camera preview
+                        // Metrics overlay sa loob ng camera preview
                         LiveMetricsOverlay(
                             detectionViewModel = detectionViewModel,
                             isDrivingActive = isDrivingActive,
@@ -328,8 +331,8 @@ fun LiveFeedScreen(
                         enabled = !isSessionBusy && !permissionRequestInFlight,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(44.dp),
-                        shape = RoundedCornerShape(22.dp),
+                            .height(46.dp),
+                        shape = RoundedCornerShape(23.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (isDrivingActive) Color(0xFFD32F2F) else Color(0xFF0F0B94)
                         )
@@ -361,7 +364,9 @@ fun LiveFeedScreen(
                     LiveTripDurationFooter(
                         isDrivingActive = isDrivingActive,
                         sessionStartedAt = sessionStartedAt,
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                        modifier = Modifier
+                            .align(Alignment.CenterHorizontally)
+                            .padding(bottom = 8.dp)
                     )
                 }
             }
@@ -458,24 +463,24 @@ private fun CompactMetricChip(
 ) {
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(Color(0xE61C1C1E))
-            .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(10.dp))
-            .padding(vertical = 6.dp, horizontal = 4.dp),
+            .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(8.dp))
+            .padding(vertical = 5.dp, horizontal = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
             text = label,
             color = Color.White.copy(alpha = 0.6f),
-            fontSize = 10.sp,
+            fontSize = 9.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        Spacer(modifier = Modifier.height(2.dp))
+        Spacer(modifier = Modifier.height(1.dp))
         Text(
             text = value,
             color = valueColor,
-            fontSize = 12.sp,
+            fontSize = 11.sp,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis

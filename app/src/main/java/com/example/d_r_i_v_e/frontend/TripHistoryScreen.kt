@@ -1,5 +1,10 @@
 package com.example.d_r_i_v_e.frontend
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -25,6 +30,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -35,8 +41,10 @@ import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.d_r_i_v_e.Incident
 import com.example.d_r_i_v_e.TripEntry
+import com.example.d_r_i_v_e.backend.routes.DetectionEvent
 import com.example.d_r_i_v_e.backend.routes.DetectionViewModel
 import com.example.d_r_i_v_e.backend.routes.DrivingSessionState
+import com.example.d_r_i_v_e.backend.routes.LocalLogStatus
 import com.example.d_r_i_v_e.backend.routes.TripHistoryViewModel
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -68,10 +76,27 @@ fun TripHistoryScreen(
     val sessionState by detectionViewModel.sessionState.collectAsState()
     val sessionStartedAt by detectionViewModel.sessionStartedAt.collectAsState()
     val liveIncidentCount by detectionViewModel.sessionDetectionCount.collectAsState()
+    val lastEvent by detectionViewModel.lastEvent.collectAsState()
+    val logStatus by detectionViewModel.logStatus.collectAsState()
 
     val isDrivingActive = sessionState == DrivingSessionState.Active || sessionStartedAt != null
     val startedAt = if (isDrivingActive) sessionStartedAt else null
     val sessionIncidentCount = liveIncidentCount
+
+    var showAlert by remember { mutableStateOf(false) }
+    var alertEvent by remember { mutableStateOf<DetectionEvent?>(null) }
+
+    LaunchedEffect(lastEvent, isDrivingActive) {
+        if (!isDrivingActive || lastEvent == null) {
+            showAlert = false
+            alertEvent = null
+        } else {
+            alertEvent = lastEvent
+            showAlert = true
+            delay(3_000)
+            showAlert = false
+        }
+    }
 
     LaunchedEffect(Unit) {
         historyViewModel.refresh()
@@ -228,6 +253,70 @@ fun TripHistoryScreen(
                     historyViewModel.archiveTrip(id)
                 },
                 onDismiss = { pendingArchiveTrip = null }
+            )
+        }
+
+        // Detection Alert Banner na automatic mawawala pagkalipas ng 3 segundo o kapag naka-off na ang session
+        AnimatedVisibility(
+            visible = showAlert,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
+        ) {
+            alertEvent?.let { event ->
+                TripHistoryAlertBanner(
+                    event = event,
+                    logStatus = logStatus
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TripHistoryAlertBanner(
+    event: DetectionEvent,
+    logStatus: LocalLogStatus
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .shadow(14.dp, RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0xFF2B1212))
+            .border(1.dp, Color(0x66FF4C4C), RoundedCornerShape(18.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(Color(0x33FF4C4C)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Warning,
+                contentDescription = null,
+                tint = Color(0xFFFF6B6B),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "${event.label} detected",
+                color = Color(0xFFFF8A8A),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                text = "High-priority safety alert",
+                color = Color.White.copy(alpha = 0.65f),
+                fontSize = 11.sp
             )
         }
     }
