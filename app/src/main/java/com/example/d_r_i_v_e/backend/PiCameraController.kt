@@ -6,6 +6,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
 import kotlinx.coroutines.CoroutineScope
@@ -134,7 +135,20 @@ internal class PiCameraController(context: Context) {
         if (!isCurrent(requestGeneration)) return
         releasePlayer()
         try {
-            val player = ExoPlayer.Builder(appContext).build()
+            // Ultra-low latency buffer control para alisin ang streaming delay
+            val loadControl = DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                    200,  // Min buffer ms (0.2 seconds bago mag-play)
+                    1500, // Max buffer ms (1.5 seconds max memory buffer)
+                    200,  // Buffer for playback ms
+                    200   // Target buffer for playback
+                )
+                .build()
+
+            val player = ExoPlayer.Builder(appContext)
+                .setLoadControl(loadControl)
+                .build()
+
             _state.update { it.copy(player = player, message = "Connecting to Pi video…") }
             player.addListener(object : Player.Listener {
                 override fun onPlayerError(error: PlaybackException) {
