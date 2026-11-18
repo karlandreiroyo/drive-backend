@@ -1,6 +1,7 @@
 package com.example.d_r_i_v_e.frontend
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -10,13 +11,14 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -25,11 +27,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import com.example.d_r_i_v_e.Incident
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -63,6 +68,7 @@ fun ArchiveScreen(
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("All") }
+    var viewingEntry by remember { mutableStateOf<ArchiveEntry?>(null) }
     var pendingDeleteEntry by remember { mutableStateOf<ArchiveEntry?>(null) }
     var pendingRestoreEntry by remember { mutableStateOf<ArchiveEntry?>(null) }
 
@@ -70,8 +76,8 @@ fun ArchiveScreen(
         val matchesSearch = entry.title.contains(searchQuery, ignoreCase = true) ||
                 entry.dateLabel.contains(searchQuery, ignoreCase = true) ||
                 entry.incidents.any {
-                    it.type.contains(searchQuery, ignoreCase = true) ||
-                            it.description.contains(searchQuery, ignoreCase = true)
+                    friendlyArchiveIncidentName(it.type.ifBlank { it.description })
+                        .contains(searchQuery, ignoreCase = true)
                 }
         val matchesFilter = when (selectedFilter) {
             "Alerts" -> entry.isAlertType || entry.incidents.isNotEmpty()
@@ -91,7 +97,7 @@ fun ArchiveScreen(
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.systemBars)
         ) {
-            // Header row: Back button + title
+            // Header row
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -105,40 +111,48 @@ fun ArchiveScreen(
                         tint = Color.White
                     )
                 }
-                Text(
-                    text = "Archive",
-                    color = Color.White,
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Archive",
+                        color = Color.White,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "${entries.size} archived ${if (entries.size == 1) "session" else "sessions"}",
+                        color = Color.White.copy(alpha = 0.55f),
+                        fontSize = 12.sp
+                    )
+                }
             }
 
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
+                    .padding(horizontal = 16.dp)
             ) {
                 // Search bar
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(24.dp))
-                        .background(Color(0xFF4A4A4C))
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFF1C1C1E))
+                        .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Search,
                         contentDescription = null,
-                        tint = Color.White.copy(alpha = 0.6f),
+                        tint = Color.White.copy(alpha = 0.55f),
                         modifier = Modifier.size(20.dp)
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Box(modifier = Modifier.weight(1f)) {
                         if (searchQuery.isEmpty()) {
                             Text(
-                                text = "Search drive sessions",
-                                color = Color.White.copy(alpha = 0.5f),
+                                text = "Search by date or alert type...",
+                                color = Color.White.copy(alpha = 0.45f),
                                 fontSize = 14.sp
                             )
                         }
@@ -147,36 +161,46 @@ fun ArchiveScreen(
                             onValueChange = { searchQuery = it },
                             textStyle = TextStyle(color = Color.White, fontSize = 14.sp),
                             singleLine = true,
-                            cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.White),
+                            cursorBrush = SolidColor(Color.White),
                             modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    if (searchQuery.isNotEmpty()) {
+                        Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Clear search",
+                            tint = Color.White.copy(alpha = 0.6f),
+                            modifier = Modifier
+                                .size(18.dp)
+                                .clickable { searchQuery = "" }
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 // Filter chips
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    FilterChip(
+                    ArchiveFilterChip(
                         label = "All",
                         isSelected = selectedFilter == "All",
                         onClick = { selectedFilter = "All" }
                     )
-                    FilterChip(
-                        label = "Alerts",
+                    ArchiveFilterChip(
+                        label = "With Alerts",
                         isSelected = selectedFilter == "Alerts",
                         onClick = { selectedFilter = "Alerts" }
                     )
-                    FilterChip(
-                        label = "Driving sessions",
+                    ArchiveFilterChip(
+                        label = "Clear Drives",
                         isSelected = selectedFilter == "Driving sessions",
                         onClick = { selectedFilter = "Driving sessions" }
                     )
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(14.dp))
             }
 
             // Scrollable archive list
@@ -185,25 +209,40 @@ fun ArchiveScreen(
                     .weight(1f)
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 20.dp)
+                    .padding(horizontal = 16.dp)
             ) {
                 if (filteredEntries.isEmpty()) {
-                    Box(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 40.dp),
-                        contentAlignment = Alignment.Center
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0xFF1C1C1E))
+                            .padding(vertical = 36.dp, horizontal = 20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "No archived items found.",
+                            text = if (entries.isEmpty()) "No archived trips yet" else "No matching results",
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = if (entries.isEmpty()) {
+                                "Cleared trips from Trip History will appear here so you can review or restore them anytime."
+                            } else {
+                                "Try clearing your search or switching filters."
+                            },
                             color = Color.White.copy(alpha = 0.5f),
-                            fontSize = 14.sp
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Center
                         )
                     }
                 } else {
                     filteredEntries.forEach { entry ->
                         ArchiveEntryCard(
                             entry = entry,
+                            onCardClick = { viewingEntry = entry },
                             onRestoreClick = { pendingRestoreEntry = entry },
                             onDeleteClick = { pendingDeleteEntry = entry }
                         )
@@ -222,13 +261,30 @@ fun ArchiveScreen(
             )
         }
 
-        // Confirmation dialog para i-restore ang napiling history entry
+        // Modal Dialog kapag ni-tap ang archived item para i-view
+        viewingEntry?.let { entry ->
+            ArchiveDetailModal(
+                entry = entry,
+                onDismiss = { viewingEntry = null },
+                onRestoreClick = {
+                    viewingEntry = null
+                    pendingRestoreEntry = entry
+                },
+                onDeleteClick = {
+                    viewingEntry = null
+                    pendingDeleteEntry = entry
+                }
+            )
+        }
+
+        // Green Restore Confirmation Dialog
         pendingRestoreEntry?.let { entry ->
             ConfirmationDialog(
                 title = "Restore Trip History?",
                 message = "Do you want to restore \"${entry.title}\" (${entry.dateLabel}) back to your Trip History?",
                 confirmLabel = "Restore",
                 showWarningIcon = false,
+                isPositiveAction = true,
                 onConfirm = {
                     val id = entry.id
                     pendingRestoreEntry = null
@@ -238,12 +294,14 @@ fun ArchiveScreen(
             )
         }
 
-        // Confirmation dialog para sa permanent delete
+        // Red Permanent Delete Confirmation Dialog
         pendingDeleteEntry?.let { entry ->
             ConfirmationDialog(
-                title = "Delete Archived Trip?",
-                message = "This will permanently delete \"${entry.title}\" (${entry.dateLabel}).",
+                title = "Delete Permanently?",
+                message = "This will permanently remove \"${entry.title}\" (${entry.dateLabel}) and cannot be undone.",
                 confirmLabel = "Delete",
+                showWarningIcon = true,
+                isPositiveAction = false,
                 onConfirm = {
                     val id = entry.id
                     pendingDeleteEntry = null
@@ -256,7 +314,7 @@ fun ArchiveScreen(
 }
 
 @Composable
-private fun FilterChip(
+private fun ArchiveFilterChip(
     label: String,
     isSelected: Boolean,
     onClick: () -> Unit
@@ -264,13 +322,18 @@ private fun FilterChip(
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(20.dp))
-            .background(if (isSelected) Color(0xFF0F0B94) else Color(0xFF4A4A4C))
-            .clickable { onClick() }
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .background(if (isSelected) Color(0xFF0F0B94) else Color(0xFF1C1C1E))
+            .border(
+                width = 1.dp,
+                color = if (isSelected) Color(0xFF3B82F6) else Color.White.copy(alpha = 0.12f),
+                shape = RoundedCornerShape(20.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
     ) {
         Text(
             text = label,
-            color = Color.White,
+            color = if (isSelected) Color.White else Color.White.copy(alpha = 0.7f),
             fontSize = 13.sp,
             fontWeight = FontWeight.SemiBold
         )
@@ -280,10 +343,111 @@ private fun FilterChip(
 @Composable
 private fun ArchiveEntryCard(
     entry: ArchiveEntry,
+    onCardClick: () -> Unit,
     onRestoreClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    val hasIncidents = entry.incidents.isNotEmpty()
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xFF1C1C1E))
+            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(16.dp))
+            .clickable(onClick = onCardClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = entry.title,
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (hasIncidents) Color(0xFF4A1A1A) else Color(0xFF1B4D2E))
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = if (hasIncidents) {
+                            "${entry.incidents.size} Alert${if (entry.incidents.size > 1) "s" else ""}"
+                        } else {
+                            "Clear"
+                        },
+                        color = if (hasIncidents) Color(0xFFFF5C5C) else Color(0xFF4CD964),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = entry.dateLabel,
+                color = Color.White.copy(alpha = 0.6f),
+                fontSize = 12.sp
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = "Tap to view details",
+                color = Color(0xFF60A5FA),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+
+        // Green Restore Icon Button
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(Color(0xFF22C55E).copy(alpha = 0.16f))
+                .border(1.dp, Color(0xFF22C55E).copy(alpha = 0.5f), CircleShape)
+                .clickable(onClick = onRestoreClick),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Restore,
+                contentDescription = "Restore",
+                tint = Color(0xFF4CD964),
+                modifier = Modifier.size(19.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        // Red Delete Icon Button
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(Color(0xFFE53935).copy(alpha = 0.16f))
+                .border(1.dp, Color(0xFFE53935).copy(alpha = 0.5f), CircleShape)
+                .clickable(onClick = onDeleteClick),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Filled.DeleteOutline,
+                contentDescription = "Delete",
+                tint = Color(0xFFFF5C5C),
+                modifier = Modifier.size(19.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ArchiveDetailModal(
+    entry: ArchiveEntry,
+    onDismiss: () -> Unit,
+    onRestoreClick: () -> Unit,
+    onDeleteClick: () -> Unit
+) {
     val hasIncidents = entry.incidents.isNotEmpty()
     val displayDuration = if (entry.totalDuration.isNotBlank() && entry.totalDuration != "Duration unavailable") {
         entry.totalDuration
@@ -291,107 +455,73 @@ private fun ArchiveEntryCard(
         "Recorded Drive"
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFF4A4A4C))
-            .clickable { expanded = !expanded }
-            .padding(16.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp))
+                .background(Color(0xFF1C1C1E))
+                .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(24.dp))
+                .padding(20.dp)
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = entry.title,
-                    color = Color.White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = entry.dateLabel,
-                    color = Color.White.copy(alpha = 0.7f),
-                    fontSize = 12.sp
-                )
-            }
-
-            // Expand / View details button
-            Box(
-                modifier = Modifier
-                    .size(34.dp)
-                    .clip(CircleShape)
-                    .background(Color.White.copy(alpha = 0.1f))
-                    .clickable { expanded = !expanded },
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                    contentDescription = if (expanded) "Hide details" else "View details",
-                    tint = Color.White,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            // Restore History Icon Button
-            Box(
-                modifier = Modifier
-                    .size(34.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFF22C55E).copy(alpha = 0.18f))
-                    .clickable(onClick = onRestoreClick),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Restore,
-                    contentDescription = "Restore to Trip History",
-                    tint = Color(0xFF4CD964),
-                    modifier = Modifier.size(19.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            // Permanent Delete Icon Button
-            Box(
-                modifier = Modifier
-                    .size(34.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFFCB1010).copy(alpha = 0.18f))
-                    .clickable(onClick = onDeleteClick),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Delete,
-                    contentDescription = "Delete permanently",
-                    tint = Color(0xFFFF5C5C),
-                    modifier = Modifier.size(19.dp)
-                )
-            }
-        }
-
-        // Expanded Details View (Duration + Incident Count + Incident List)
-        if (expanded) {
-            Spacer(modifier = Modifier.height(12.dp))
-
+            // Modal Title + Close X
             Row(
                 modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = entry.title,
+                        color = Color.White,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = entry.dateLabel,
+                        color = Color.White.copy(alpha = 0.65f),
+                        fontSize = 13.sp
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.08f))
+                        .clickable(onClick = onDismiss),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Close,
+                        contentDescription = "Close",
+                        tint = Color.White.copy(alpha = 0.8f),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Duration & Incident Count Summary Row
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF28282B))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
                     imageVector = Icons.Filled.Schedule,
                     contentDescription = null,
                     tint = Color.White.copy(alpha = 0.65f),
-                    modifier = Modifier.size(15.dp)
+                    modifier = Modifier.size(16.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     text = displayDuration,
-                    color = Color.White.copy(alpha = 0.75f),
+                    color = Color.White.copy(alpha = 0.85f),
                     fontSize = 12.sp,
                     modifier = Modifier.weight(1f)
                 )
@@ -414,16 +544,39 @@ private fun ArchiveEntryCard(
                 }
             }
 
-            if (hasIncidents) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0xFF2A2A2C))
-                        .padding(vertical = 4.dp)
-                ) {
-                    entry.incidents.forEach { incident ->
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Text(
+                text = "Logged Incidents",
+                color = Color.White.copy(alpha = 0.7f),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Scrollable Incidents List inside Modal
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 220.dp)
+                    .verticalScroll(rememberScrollState())
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF28282B))
+                    .padding(vertical = 4.dp)
+            ) {
+                if (!hasIncidents) {
+                    Text(
+                        text = "No drowsiness or distraction incidents were logged during this trip.",
+                        color = Color.White.copy(alpha = 0.55f),
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 20.dp)
+                    )
+                } else {
+                    entry.incidents.forEachIndexed { index, incident ->
                         val rawPercent = incident.confidence?.let {
                             if (it <= 1f) (it * 100).toInt() else it.toInt()
                         } ?: Regex("""(\d{1,3})\s*%""").find(incident.description)
@@ -439,11 +592,14 @@ private fun ArchiveEntryCard(
                             "Moderate" -> Color(0xFFFFC107)
                             else -> Color(0xFF4CD964)
                         }
+                        val friendlyTitle = friendlyArchiveIncidentName(
+                            incident.type.ifBlank { incident.description }
+                        )
 
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
@@ -456,8 +612,8 @@ private fun ArchiveEntryCard(
                             Column(modifier = Modifier.weight(1f)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
-                                        text = incident.type.ifBlank { incident.description.ifBlank { "Safety Alert" } },
-                                        color = Color.White.copy(alpha = 0.95f),
+                                        text = friendlyTitle,
+                                        color = Color.White,
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         maxLines = 1,
@@ -482,17 +638,98 @@ private fun ArchiveEntryCard(
                                 )
                             }
                         }
+
+                        if (index < entry.incidents.lastIndex) {
+                            HorizontalDivider(color = Color.White.copy(alpha = 0.06f))
+                        }
                     }
                 }
-            } else {
-                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            // Green Restore Button inside Modal
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFF0A2E18))
+                    .border(1.dp, Color(0xFF22C55E), RoundedCornerShape(10.dp))
+                    .clickable(onClick = onRestoreClick),
+                contentAlignment = Alignment.Center
+            ) {
                 Text(
-                    text = "No drowsiness or distraction incidents were logged during this drive.",
-                    color = Color.White.copy(alpha = 0.55f),
-                    fontSize = 12.sp
+                    text = "Restore to Trip History",
+                    color = Color(0xFF22C55E),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Red Delete Button inside Modal
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFF3A0A0A))
+                    .border(1.dp, Color(0xFFE53935), RoundedCornerShape(10.dp))
+                    .clickable(onClick = onDeleteClick),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Delete Permanently",
+                    color = Color(0xFFE53935),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Close Button
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFF3A3A3C))
+                    .clickable(onClick = onDismiss),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Close",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
                 )
             }
         }
+    }
+}
+
+private fun friendlyArchiveIncidentName(rawType: String): String {
+    val normalized = rawType.lowercase(Locale.US)
+    return when {
+        normalized.isBlank() -> "Safety Alert"
+        normalized.contains("microsleep") ||
+                normalized.contains("eye") ||
+                normalized.contains("blink") -> "Microsleep Detected"
+        normalized.contains("drows") ||
+                normalized.contains("sleep") ||
+                normalized.contains("fatigue") ||
+                normalized.contains("yawn") -> "Drowsiness Alert"
+        normalized.contains("nod") ||
+                normalized.contains("head") ||
+                normalized.contains("distract") ||
+                normalized.contains("gaze") ||
+                normalized.contains("phone") ||
+                normalized.contains("motion") ||
+                normalized.contains("movement") -> "Head Nod / Distraction"
+        else -> rawType.trim().ifBlank { "Safety Alert" }
     }
 }
 
