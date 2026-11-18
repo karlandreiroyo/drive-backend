@@ -263,12 +263,13 @@ fun LiveFeedScreen(
                         logStatus = logStatus,
                         statusMessage = statusMessage
                     )
-
                     val hardwareNote = when {
-                        !hardwareStatus.esp32Connected && hardwareStatus.message != null ->
-                            hardwareStatus.message
                         hardwareStatus.alertActive || isHardwareAlertActive ->
                             "Drowsy alert active (buzzer + vibration)"
+                        !hardwareStatus.esp32Connected &&
+                                !hardwareStatus.message.isNullOrBlank() &&
+                                !hardwareStatus.message.equals("timeout", ignoreCase = true) ->
+                            hardwareStatus.message
                         else -> null
                     }
                     if (hardwareNote != null) {

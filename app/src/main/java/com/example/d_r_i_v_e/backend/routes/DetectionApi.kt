@@ -173,6 +173,8 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
     fun finishSession(onResult: (String) -> Unit = {}) {
         if (_sessionState.value != DrivingSessionState.Active) return
         val trip = activeTrip ?: return
+        val wasInitiallySynced = trip.isSynced
+        val hadOnlineWrites = _logStatus.value == LocalLogStatus.SavedOnline
         val generation = ++sessionGeneration
         val finishedAt = System.currentTimeMillis()
 
@@ -187,14 +189,30 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         _statusMessage.value = null
 
         viewModelScope.launch {
+            var syncedOnline = false
             val saved = try {
-                repository.finishTrip(trip.id, finishedAt)
+                val result = repository.finishTrip(trip.id, finishedAt)
+                when (result) {
+                    is Boolean -> {
+                        syncedOnline = result && (wasInitiallySynced || hadOnlineWrites)
+                        result
+                    }
+                    is TripEntity -> {
+                        syncedOnline = result.isSynced
+                        true
+                    }
+                    else -> {
+                        syncedOnline = result != null && (wasInitiallySynced || hadOnlineWrites)
+                        result != null
+                    }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Couldn't close trip remotely; trying local storage", e)
                 try {
                     repository.closeTripOffline(trip.id, finishedAt)
+                    syncedOnline = false
                     true
                 } catch (localError: CancellationException) {
                     throw localError
@@ -210,10 +228,10 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
                 _statusMessage.value = "Couldn't save this trip. Check Logcat: $TAG."
             }
             onResult(
-                if (saved) {
-                    "Trip saved. Offline changes sync automatically when online."
-                } else {
-                    "Couldn't save this trip."
+                when {
+                    !saved -> "Couldn't save this trip."
+                    syncedOnline -> "Trip saved online."
+                    else -> "Trip saved locally. Will sync automatically when online."
                 }
             )
         }
