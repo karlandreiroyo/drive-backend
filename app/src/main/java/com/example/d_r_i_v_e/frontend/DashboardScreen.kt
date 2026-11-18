@@ -97,7 +97,9 @@ fun DashboardScreen(
     val isDrivingActive = sessionState == DrivingSessionState.Active || sessionStartedAt != null
     val isSessionBusy = sessionState == DrivingSessionState.Starting ||
             sessionState == DrivingSessionState.Stopping
-    val isOnline = isDrivingActive
+
+    // Naka-sync na sa ESP32 hardware connection status
+    val isOnline = isHardwareConnected
 
     var elapsedSeconds by remember { mutableLongStateOf(0L) }
     var lastFinishedDuration by remember { mutableStateOf<String?>(null) }
@@ -201,7 +203,7 @@ fun DashboardScreen(
                         .background(Color(0xFF141414))
                         .padding(20.dp)
                 ) {
-                    // Header row: Dashboard title + Offline/Online badge
+                    // Header row: Dashboard title + Offline/Online badge (synced with ESP32 hardware)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
