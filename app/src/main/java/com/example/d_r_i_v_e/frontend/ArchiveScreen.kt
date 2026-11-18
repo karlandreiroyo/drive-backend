@@ -9,8 +9,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
@@ -46,18 +47,18 @@ fun ArchiveScreen(
     onTabMapClick: () -> Unit = {},
     onTabSettingsClick: () -> Unit = {}
 ) {
-    // Awtomatikong mag-refresh/mag-fetch ng archive list pagbukas ng screen o app refresh
     LaunchedEffect(Unit) {
         onRefresh()
     }
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("All") }
-    var pendingDeleteId by remember { mutableStateOf<String?>(null) }
-    var pendingRestoreId by remember { mutableStateOf<String?>(null) }
+    var pendingDeleteEntry by remember { mutableStateOf<ArchiveEntry?>(null) }
+    var pendingRestoreEntry by remember { mutableStateOf<ArchiveEntry?>(null) }
 
     val filteredEntries = entries.filter { entry ->
-        val matchesSearch = entry.title.contains(searchQuery, ignoreCase = true)
+        val matchesSearch = entry.title.contains(searchQuery, ignoreCase = true) ||
+                entry.dateLabel.contains(searchQuery, ignoreCase = true)
         val matchesFilter = when (selectedFilter) {
             "Alerts" -> entry.isAlertType
             "Driving sessions" -> !entry.isAlertType
@@ -76,7 +77,6 @@ fun ArchiveScreen(
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.systemBars)
         ) {
-
             // Header row: Back button + title
             Row(
                 modifier = Modifier
@@ -86,7 +86,7 @@ fun ArchiveScreen(
             ) {
                 IconButton(onClick = onBackClick) {
                     Icon(
-                        imageVector = Icons.Filled.ArrowBack,
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back",
                         tint = Color.White
                     )
@@ -104,7 +104,6 @@ fun ArchiveScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp)
             ) {
-
                 // Search bar
                 Row(
                     modifier = Modifier
@@ -134,7 +133,8 @@ fun ArchiveScreen(
                             onValueChange = { searchQuery = it },
                             textStyle = TextStyle(color = Color.White, fontSize = 14.sp),
                             singleLine = true,
-                            cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.White)
+                            cursorBrush = androidx.compose.ui.graphics.SolidColor(Color.White),
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }
@@ -190,8 +190,8 @@ fun ArchiveScreen(
                     filteredEntries.forEach { entry ->
                         ArchiveEntryCard(
                             entry = entry,
-                            onRestoreClick = { pendingRestoreId = entry.id },
-                            onDeleteClick = { pendingDeleteId = entry.id }
+                            onRestoreClick = { pendingRestoreEntry = entry },
+                            onDeleteClick = { pendingDeleteEntry = entry }
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                     }
@@ -208,30 +208,34 @@ fun ArchiveScreen(
             )
         }
 
-        pendingRestoreId?.let { entryId ->
+        // Confirmation dialog para i-restore ang napiling history entry
+        pendingRestoreEntry?.let { entry ->
             ConfirmationDialog(
-                title = "Restore Drive Session?",
-                message = "This drive session will be returned to Trip History.",
-                confirmLabel = "Confirm Restore",
+                title = "Restore Trip History?",
+                message = "Do you want to restore \"${entry.title}\" (${entry.dateLabel}) back to your Trip History?",
+                confirmLabel = "Restore",
                 showWarningIcon = false,
                 onConfirm = {
-                    pendingRestoreId = null
-                    onRestoreEntry(entryId)
+                    val id = entry.id
+                    pendingRestoreEntry = null
+                    onRestoreEntry(id)
                 },
-                onDismiss = { pendingRestoreId = null }
+                onDismiss = { pendingRestoreEntry = null }
             )
         }
 
-        pendingDeleteId?.let { entryId ->
+        // Confirmation dialog para sa permanent delete
+        pendingDeleteEntry?.let { entry ->
             ConfirmationDialog(
-                title = "Delete Archived Drive Session?",
-                message = "This will permanently delete your drive session.",
+                title = "Delete Archived Trip?",
+                message = "This will permanently delete \"${entry.title}\" (${entry.dateLabel}).",
                 confirmLabel = "Delete",
                 onConfirm = {
-                    pendingDeleteId = null
-                    onDeleteEntry(entryId)
+                    val id = entry.id
+                    pendingDeleteEntry = null
+                    onDeleteEntry(id)
                 },
-                onDismiss = { pendingDeleteId = null }
+                onDismiss = { pendingDeleteEntry = null }
             )
         }
     }
@@ -288,27 +292,39 @@ private fun ArchiveEntryCard(
             )
         }
 
-        IconButton(
-            onClick = onRestoreClick,
-            modifier = Modifier.size(40.dp)
+        // Restore History Icon Button
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(CircleShape)
+                .background(Color(0xFF22C55E).copy(alpha = 0.18f))
+                .clickable(onClick = onRestoreClick),
+            contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = Icons.Filled.Restore,
-                contentDescription = "Restore",
+                contentDescription = "Restore to Trip History",
                 tint = Color(0xFF4CD964),
-                modifier = Modifier.size(22.dp)
+                modifier = Modifier.size(20.dp)
             )
         }
 
-        IconButton(
-            onClick = onDeleteClick,
-            modifier = Modifier.size(40.dp)
+        Spacer(modifier = Modifier.width(10.dp))
+
+        // Permanent Delete Icon Button
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .clip(CircleShape)
+                .background(Color(0xFFCB1010).copy(alpha = 0.18f))
+                .clickable(onClick = onDeleteClick),
+            contentAlignment = Alignment.Center
         ) {
             Icon(
                 imageVector = Icons.Filled.Delete,
                 contentDescription = "Delete permanently",
                 tint = Color(0xFFFF5C5C),
-                modifier = Modifier.size(22.dp)
+                modifier = Modifier.size(20.dp)
             )
         }
     }
