@@ -241,7 +241,7 @@ fun LiveFeedScreen(
                             )
                         }
 
-                        // Isolated metrics overlay so per-frame updates don't recompose CameraPreview
+                        // Fully optimized throttled metrics overlay
                         LiveMetricsOverlay(
                             detectionViewModel = detectionViewModel,
                             isDrivingActive = isDrivingActive,
@@ -254,7 +254,6 @@ fun LiveFeedScreen(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Isolated status pill so frame changes don't recompose outer layout
                     LiveStatusBanner(
                         detectionViewModel = detectionViewModel,
                         sessionState = sessionState,
@@ -360,7 +359,6 @@ fun LiveFeedScreen(
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Isolated 1-second timer so ticking every second never recomposes the camera preview
                     LiveTripDurationFooter(
                         isDrivingActive = isDrivingActive,
                         sessionStartedAt = sessionStartedAt,
@@ -405,40 +403,58 @@ private fun LiveMetricsOverlay(
 ) {
     val metrics by detectionViewModel.monitorFrame.collectAsState()
 
+    val blinkText = remember(metrics?.blinkRatePerMinute, isDrivingActive) {
+        metrics?.blinkRatePerMinute?.let { "$it bpm" } ?: if (isDrivingActive) "Calibrating…" else "--"
+    }
+
+    val eyesText = remember(metrics) {
+        when {
+            metrics == null -> if (isDrivingActive) "Calibrating…" else "--"
+            metrics?.drowsy == true -> "Drowsy"
+            else -> "Alert"
+        }
+    }
+
+    val eyesSub = remember(metrics) {
+        metrics?.let { getFriendlyAlertLabel("drowsiness", it.drowsinessConfidence) }
+    }
+
+    val eyesColor = remember(metrics) {
+        when {
+            metrics?.drowsy == true -> Color(0xFFFF6B6B)
+            metrics != null -> Color(0xFF4CD964)
+            else -> Color.White
+        }
+    }
+
+    val headText = remember(metrics, isDrivingActive) {
+        metrics?.headPoseLabel ?: if (isDrivingActive) "Calibrating…" else "--"
+    }
+
+    val headSub = remember(metrics) {
+        metrics?.let { if (it.headPoseConfidence >= 0.7f) "Stable" else "Moving" }
+    }
+
     Row(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         MetricChip(
             label = "Blink",
-            value = metrics?.blinkRatePerMinute?.let { "$it bpm" }
-                ?: if (isDrivingActive) "Calibrating…" else "--",
+            value = blinkText,
             modifier = Modifier.weight(1f)
         )
         MetricChip(
             label = "Eyes",
-            value = when {
-                metrics == null -> if (isDrivingActive) "Calibrating…" else "--"
-                metrics?.drowsy == true -> "Drowsy"
-                else -> "Alert"
-            },
-            sub = metrics?.let {
-                getFriendlyAlertLabel("drowsiness", it.drowsinessConfidence)
-            },
-            valueColor = when {
-                metrics?.drowsy == true -> Color(0xFFFF6B6B)
-                metrics != null -> Color(0xFF4CD964)
-                else -> Color.White
-            },
+            value = eyesText,
+            sub = eyesSub,
+            valueColor = eyesColor,
             modifier = Modifier.weight(1f)
         )
         MetricChip(
             label = "Head",
-            value = metrics?.headPoseLabel
-                ?: if (isDrivingActive) "Calibrating…" else "--",
-            sub = metrics?.let {
-                if (it.headPoseConfidence >= 0.7f) "Stable" else "Moving"
-            },
+            value = headText,
+            sub = headSub,
             modifier = Modifier.weight(1f)
         )
     }
