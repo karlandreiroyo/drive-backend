@@ -7,6 +7,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -51,6 +52,12 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/** Gaano katagal nakikita ang banner. */
+private const val ALERT_DURATION_MS = 3_000L
+
+/** Pahinga bago ulit lumabas ang banner, para hindi mag-blink kapag tuloy-tuloy ang detection. */
+private const val ALERT_COOLDOWN_MS = 4_000L
+
 @Composable
 fun TripHistoryScreen(
     onTabDashboardClick: () -> Unit = {},
@@ -85,16 +92,32 @@ fun TripHistoryScreen(
 
     var showAlert by remember { mutableStateOf(false) }
     var alertEvent by remember { mutableStateOf<DetectionEvent?>(null) }
+    var lastAlertHiddenAt by remember { mutableLongStateOf(0L) }
 
+    // 1) Taga-trigger: nagpapakita lang ng banner kung bago ang event, hindi pa nakikita,
+    //    at tapos na ang cooldown. Hindi nito ginagalaw ang timer ng pagtatago.
     LaunchedEffect(lastEvent, isDrivingActive) {
-        if (!isDrivingActive || lastEvent == null) {
+        val event = lastEvent
+        if (!isDrivingActive || event == null) {
             showAlert = false
             alertEvent = null
-        } else {
-            alertEvent = lastEvent
+            return@LaunchedEffect
+        }
+        val now = System.currentTimeMillis()
+        val isFresh = now - event.timestamp <= ALERT_DURATION_MS
+        val cooledDown = now - lastAlertHiddenAt >= ALERT_COOLDOWN_MS
+        if (!showAlert && isFresh && cooledDown) {
+            alertEvent = event
             showAlert = true
-            delay(3_000)
+        }
+    }
+
+    // 2) Taga-tago: naka-key lang sa showAlert, kaya hindi ito nare-restart ng bagong events.
+    LaunchedEffect(showAlert) {
+        if (showAlert) {
+            delay(ALERT_DURATION_MS)
             showAlert = false
+            lastAlertHiddenAt = System.currentTimeMillis()
         }
     }
 
@@ -256,7 +279,7 @@ fun TripHistoryScreen(
             )
         }
 
-        // Detection Alert Banner na automatic mawawala pagkalipas ng 3 segundo o kapag naka-off na ang session
+        // Detection Alert Banner: 3 segundo lang, may cooldown, at pwedeng i-tap para i-dismiss
         AnimatedVisibility(
             visible = showAlert,
             modifier = Modifier
@@ -269,7 +292,11 @@ fun TripHistoryScreen(
             alertEvent?.let { event ->
                 TripHistoryAlertBanner(
                     event = event,
-                    logStatus = logStatus
+                    logStatus = logStatus,
+                    onDismiss = {
+                        showAlert = false
+                        lastAlertHiddenAt = System.currentTimeMillis()
+                    }
                 )
             }
         }
@@ -279,7 +306,8 @@ fun TripHistoryScreen(
 @Composable
 private fun TripHistoryAlertBanner(
     event: DetectionEvent,
-    logStatus: LocalLogStatus
+    logStatus: LocalLogStatus,
+    onDismiss: () -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -288,6 +316,7 @@ private fun TripHistoryAlertBanner(
             .clip(RoundedCornerShape(18.dp))
             .background(Color(0xFF2B1212))
             .border(1.dp, Color(0x66FF4C4C), RoundedCornerShape(18.dp))
+            .clickable { onDismiss() }
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -594,37 +623,37 @@ private fun formatIncidentTime(rawTime: String): String {
     val trimmed = rawTime.trim()
     if (trimmed.isEmpty()) return rawTime
 
+    // Naka-format na (hal. "6:41 PM")
     if (trimmed.contains("AM", ignoreCase = true) || trimmed.contains("PM", ignoreCase = true)) {
         return trimmed
     }
 
-    return try {
-        val num = trimmed.toLongOrNull()
-        if (num != null) {
-            val millis = if (num < 10_000_000_000L) num * 1000 else num
-            val sdf = SimpleDateFormat("h:mm a", Locale.US)
-            return sdf.format(Date(millis))
-        }
+    val outFormat = SimpleDateFormat("h:mm a", Locale.US) // oras ng device
 
-        val cleanTime = trimmed.replace("Z", "+0000").replace("T", " ").substringBefore(".")
-        val formats = listOf(
-            SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US),
-            SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
-        )
-        for (parser in formats) {
-            try {
-                val date = parser.parse(cleanTime)
-                if (date != null) {
-                    val formatter = SimpleDateFormat("h:mm a", Locale.US)
-                    return formatter.format(date)
-                }
-            } catch (_: Exception) {
-            }
-        }
-        trimmed
-    } catch (_: Exception) {
-        rawTime
+    // Epoch (seconds o millis)
+    trimmed.toLongOrNull()?.let { num ->
+        val millis = if (num < 10_000_000_000L) num * 1000 else num
+        return outFormat.format(Date(millis))
     }
+
+    // ISO-8601 na may timezone (Z o +00:00)
+    try {
+        return outFormat.format(Date.from(java.time.OffsetDateTime.parse(trimmed).toInstant()))
+    } catch (_: Exception) {
+    }
+
+    // "yyyy-MM-dd HH:mm:ss" na walang timezone: ituring na UTC (galing Supabase)
+    val cleanTime = trimmed.replace("T", " ").substringBefore(".")
+    for (pattern in listOf("yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm")) {
+        try {
+            val parser = SimpleDateFormat(pattern, Locale.US).apply {
+                timeZone = java.util.TimeZone.getTimeZone("UTC")
+            }
+            parser.parse(cleanTime)?.let { return outFormat.format(it) }
+        } catch (_: Exception) {
+        }
+    }
+    return trimmed
 }
 
 private data class IncidentDisplay(

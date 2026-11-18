@@ -16,10 +16,8 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
@@ -146,15 +144,14 @@ fun LiveFeedScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
-                // Ginawang scrollable para hindi maipit ang mga buttons sa ilalim
+                // Malinis at balanseng layout na hindi na kailangang i-scroll
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color(0xFF141414))
-                        .verticalScroll(rememberScrollState())
                         .padding(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.SpaceBetween
                 ) {
                     // Header row
                     Row(
@@ -172,11 +169,11 @@ fun LiveFeedScreen(
                     // Pi Camera Bar
                     PiCameraBar(handle = pi, isDrivingActive = isDrivingActive)
 
-                    // Camera Preview Box with Clean Integrated Metrics Overlay
+                    // Malaki at maluwag na Camera Preview Box with Integrated Metrics Overlay
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(260.dp) // Nilagyan ng fixed height para hindi sakupin ang buong screen
+                            .weight(1f) // Kumukuha ng sapat at malaking espasyo para sa malinaw na preview
                             .clip(RoundedCornerShape(14.dp))
                             .background(Color(0xFF2C2C2E)),
                         contentAlignment = Alignment.Center
@@ -205,7 +202,7 @@ fun LiveFeedScreen(
                                     imageVector = Icons.Filled.PhotoCamera,
                                     contentDescription = "Camera Stream",
                                     tint = Color.White.copy(alpha = 0.3f),
-                                    modifier = Modifier.size(54.dp)
+                                    modifier = Modifier.size(64.dp)
                                 )
                                 if (permissionDenied) {
                                     Spacer(modifier = Modifier.height(6.dp))
@@ -248,7 +245,7 @@ fun LiveFeedScreen(
                             )
                         }
 
-                        // Metrics overlay sa loob ng camera preview
+                        // Metrics overlay sa loob ng ibabang bahagi ng camera
                         LiveMetricsOverlay(
                             detectionViewModel = detectionViewModel,
                             isDrivingActive = isDrivingActive,
@@ -331,8 +328,8 @@ fun LiveFeedScreen(
                         enabled = !isSessionBusy && !permissionRequestInFlight,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(46.dp),
-                        shape = RoundedCornerShape(23.dp),
+                            .height(44.dp),
+                        shape = RoundedCornerShape(22.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (isDrivingActive) Color(0xFFD32F2F) else Color(0xFF0F0B94)
                         )
@@ -364,9 +361,7 @@ fun LiveFeedScreen(
                     LiveTripDurationFooter(
                         isDrivingActive = isDrivingActive,
                         sessionStartedAt = sessionStartedAt,
-                        modifier = Modifier
-                            .align(Alignment.CenterHorizontally)
-                            .padding(bottom = 8.dp)
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
                     )
                 }
             }
@@ -463,9 +458,9 @@ private fun CompactMetricChip(
 ) {
     Column(
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(10.dp))
             .background(Color(0xE61C1C1E))
-            .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(8.dp))
+            .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(10.dp))
             .padding(vertical = 5.dp, horizontal = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
