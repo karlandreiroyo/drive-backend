@@ -25,9 +25,10 @@ class Esp32AlertController(
 
     private val TAG = "Esp32AlertController"
 
-    // Timing thresholds: Agad mag-alarm kapag drowsy, tapos may 2-second cooldown/tigil bago pwede mag-alarm ulit.
+    // Timing thresholds:
     private val DROWSY_THRESHOLD_MS = 100L
-    private val COOLDOWN_DURATION_MS = 2_000L // 2 seconds na tigil bago mag-alarm ulit
+    private val ALERT_DURATION_MS = 3_000L   // Pinalawig natin sa 3 segundo para sapat ang tagal ng gising/alarm sa driver
+    private val COOLDOWN_DURATION_MS = 2_000L // 2 segundo na pahinga bago muling tumunog kung sakaling drowsy pa rin
 
     // Network tuning
     private val REQUEST_TIMEOUT_MS = 2_000L
@@ -35,6 +36,7 @@ class Esp32AlertController(
 
     @Volatile private var state = AlertState.IDLE
     @Volatile private var drowsyStartMs = -1L
+    @Volatile private var alertStartMs = -1L
     @Volatile private var cooldownStartMs = -1L
 
     private val alertInFlight = AtomicBoolean(false)
@@ -64,6 +66,7 @@ class Esp32AlertController(
 
         when (state) {
             AlertState.IDLE -> {
+                // Tanging kapag may nadetect na drowsiness ang system saka lamang magti-trigger
                 if (isDrowsy) {
                     if (drowsyStartMs < 0) drowsyStartMs = now
                     val elapsed = now - drowsyStartMs
@@ -76,19 +79,22 @@ class Esp32AlertController(
             }
 
             AlertState.ALERTING -> {
-                // Kapag nag-alarm na, agad nating i-clear/papatayin ang hardware para masunod ang 2-sec gap
-                if (clearInFlight.compareAndSet(false, true)) {
-                    scope.launch { tryClear(requestGeneration, enteringCooldown = true) }
+                // Hahayaan muna nating tumunog ang hardware sa loob ng 3 segundo (ALERT_DURATION_MS)
+                if (alertStartMs > 0 && (now - alertStartMs) >= ALERT_DURATION_MS) {
+                    if (clearInFlight.compareAndSet(false, true)) {
+                        scope.launch { tryClear(requestGeneration, enteringCooldown = true) }
+                    }
                 }
             }
 
             AlertState.COOLDOWN -> {
-                // Pinapahinto muna ng 2 segundo bago payagang mag-detect at mag-alarm ulit
+                // Titigil muna ng 2 segundo bago payagang mag-alarm ulit sakaling drowsy pa rin ang driver
                 if (cooldownStartMs > 0 && (now - cooldownStartMs) >= COOLDOWN_DURATION_MS) {
                     state = AlertState.IDLE
                     drowsyStartMs = -1L
+                    alertStartMs = -1L
                     cooldownStartMs = -1L
-                    Log.i(TAG, "Cooldown tapos na -> Estado ay IDLE na ulit para sa susunod na detection.")
+                    Log.i(TAG, "Cooldown tapos na -> Handa na uli para sa susunod na detection.")
                 }
             }
         }
@@ -100,6 +106,7 @@ class Esp32AlertController(
         val requestGeneration = generation.incrementAndGet()
         state = AlertState.IDLE
         drowsyStartMs = -1L
+        alertStartMs = -1L
         cooldownStartMs = -1L
         clearInFlight.set(true)
         scope.launch { tryClear(requestGeneration, forced = true) }
@@ -110,6 +117,7 @@ class Esp32AlertController(
         generation.incrementAndGet()
         state = AlertState.IDLE
         drowsyStartMs = -1L
+        alertStartMs = -1L
         cooldownStartMs = -1L
         _alertActive.value = false
         monitoringEnabled = true
@@ -125,7 +133,8 @@ class Esp32AlertController(
                 if (success) {
                     _alertActive.value = true
                     state = AlertState.ALERTING
-                    Log.i(TAG, "State -> ALERTING (Naka-trigger ang alarm sa hardware)")
+                    alertStartMs = System.currentTimeMillis() // Itatala kung kailan nagsimula ang 3-second alarm
+                    Log.i(TAG, "State -> ALERTING (Nag-aalarm ang hardware nang sapat ang haba)")
                 } else {
                     Log.w(TAG, "tryAlert() exhausted retries - staying IDLE")
                 }
@@ -147,10 +156,11 @@ class Esp32AlertController(
                     if (enteringCooldown) {
                         state = AlertState.COOLDOWN
                         cooldownStartMs = System.currentTimeMillis()
-                        Log.i(TAG, "State -> COOLDOWN (Nag-alarm na, naghihintay ng 2 segundo bago mag-detect ulit)")
+                        Log.i(TAG, "State -> COOLDOWN (Tapos na ang 3s alarm, nagpapahinga ng 2 segundo)")
                     } else {
                         state = AlertState.IDLE
                         drowsyStartMs = -1L
+                        alertStartMs = -1L
                         cooldownStartMs = -1L
                         Log.i(TAG, "State -> IDLE${if (forced) " [forced]" else ""}")
                     }
