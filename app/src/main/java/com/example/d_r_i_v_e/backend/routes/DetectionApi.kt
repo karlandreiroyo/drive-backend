@@ -17,7 +17,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlin.time.Duration.Companion.seconds
 
 data class DetectionEvent(
     val label: String,
@@ -46,9 +45,15 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
     private val _sessionStartedAt = MutableStateFlow<Long?>(null)
     val sessionStartedAt: StateFlow<Long?> = _sessionStartedAt.asStateFlow()
 
+    /**
+     * The most recent detection. Clears itself [LAST_EVENT_TTL_MS] after the
+     * last detection, so anything keyed on "lastEvent != null" (alert banners,
+     * the ESP32 alert in DrivingSessionMonitor) turns off once detection stops
+     * instead of staying on until the session ends.
+     */
     private val _lastEvent = MutableStateFlow<DetectionEvent?>(null)
     val lastEvent: StateFlow<DetectionEvent?> = _lastEvent.asStateFlow()
-    private var clearEventJob: Job? = null
+    private var lastEventClearJob: Job? = null
 
     // Latest per-frame metrics from the monitor; drives the Live Feed cards.
     private val _monitorFrame = MutableStateFlow<DriverMonitorFrame?>(null)
@@ -63,8 +68,19 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
     @Volatile
     private var activeTrip: TripEntity? = null
 
-    fun clearLastEvent() {
-        clearEventJob?.cancel()
+    /** Sets lastEvent and schedules it to clear if no newer detection arrives. */
+    private fun publishLastEvent(event: DetectionEvent) {
+        _lastEvent.value = event
+        lastEventClearJob?.cancel()
+        lastEventClearJob = viewModelScope.launch {
+            delay(LAST_EVENT_TTL_MS)
+            if (_lastEvent.value === event) _lastEvent.value = null
+        }
+    }
+
+    private fun clearLastEvent() {
+        lastEventClearJob?.cancel()
+        lastEventClearJob = null
         _lastEvent.value = null
     }
 
@@ -150,17 +166,7 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             if (activeTrip?.id != trip.id || _sessionState.value != DrivingSessionState.Active) return@launch
             _sessionDetectionCount.update { it + 1 }
-            _lastEvent.value = event
-
-            // Awtomatikong buburahin ang banner event pagkatapos ng 3 segundo para hindi ma-stuck sa lahat ng screens
-            clearEventJob?.cancel()
-            clearEventJob = viewModelScope.launch {
-                delay(3.seconds)
-                if (_lastEvent.value?.timestamp == event.timestamp) {
-                    _lastEvent.value = null
-                }
-            }
-
+            publishLastEvent(event)
             _sessionIncidents.update { (it + event).takeLast(500) }
             _logStatus.value = LocalLogStatus.Saving
             try {
@@ -283,5 +289,8 @@ class DetectionViewModel(application: Application) : AndroidViewModel(applicatio
 
     private companion object {
         const val TAG = "DetectionViewModel"
+
+        /** Gaano katagal mananatili ang lastEvent pagkatapos ng huling detection. */
+        const val LAST_EVENT_TTL_MS = 5_000L
     }
 }

@@ -48,6 +48,12 @@ import kotlinx.coroutines.delay
 
 private val mainTabScreens = setOf("dashboard", "liveFeed", "tripHistory", "settings")
 
+/** Gaano katagal nakikita ang global alert banner. */
+private const val GLOBAL_ALERT_DURATION_MS = 3_000L
+
+/** Pahinga bago ulit lumabas ang banner, para hindi mag-blink kapag tuloy-tuloy ang detection. */
+private const val GLOBAL_ALERT_COOLDOWN_MS = 4_000L
+
 @Composable
 fun AppNavigation() {
     val context = LocalContext.current
@@ -134,17 +140,34 @@ fun AppNavigation() {
 
     var showGlobalAlert by remember { mutableStateOf(false) }
     var globalAlertEvent by remember { mutableStateOf<DetectionEvent?>(null) }
+    var lastGlobalHiddenAt by remember { mutableLongStateOf(0L) }
 
+    // 1) Taga-trigger. Kapag walang event o tapos na ang session, laging itinatago ang banner.
+    //    (Dati, `lastEvent ?: return` ang lumalabas agad bago maitago ang banner, kaya
+    //    nanatili itong nakikita pagkatapos ng session.)
     LaunchedEffect(lastEvent, isDrivingActive) {
-        val event = lastEvent ?: return@LaunchedEffect
-        if (!isDrivingActive) {
+        val event = lastEvent
+        if (!isDrivingActive || event == null) {
             showGlobalAlert = false
+            globalAlertEvent = null
             return@LaunchedEffect
         }
-        globalAlertEvent = event
-        showGlobalAlert = true
-        delay(4_000)
-        showGlobalAlert = false
+        val now = System.currentTimeMillis()
+        val isFresh = now - event.timestamp <= GLOBAL_ALERT_DURATION_MS
+        val cooledDown = now - lastGlobalHiddenAt >= GLOBAL_ALERT_COOLDOWN_MS
+        if (!showGlobalAlert && isFresh && cooledDown) {
+            globalAlertEvent = event
+            showGlobalAlert = true
+        }
+    }
+
+    // 2) Taga-tago. Naka-key lang sa showGlobalAlert, kaya hindi ito nare-restart ng bagong events.
+    LaunchedEffect(showGlobalAlert) {
+        if (showGlobalAlert) {
+            delay(GLOBAL_ALERT_DURATION_MS)
+            showGlobalAlert = false
+            lastGlobalHiddenAt = System.currentTimeMillis()
+        }
     }
 
     var selectedGoogleAccount by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -643,9 +666,12 @@ fun AppNavigation() {
             )
         }
 
-        // Global Alert Banner kapag nasa ibang tab (hindi liveFeed) at may na-detect
+        // Global Alert Banner para sa ibang tab. Hindi ito ipinapakita sa liveFeed at tripHistory
+        // dahil may sarili silang banner (kung hindi, magkapatong ang dalawa).
         AnimatedVisibility(
-            visible = showGlobalAlert && currentScreen != "liveFeed",
+            visible = showGlobalAlert &&
+                    currentScreen != "liveFeed" &&
+                    currentScreen != "tripHistory",
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .statusBarsPadding()
